@@ -24,7 +24,8 @@ def spectral_gating_noise_reduction(
     n_fft: int = 512,
     hop_length: int = 160,
     prop_decrease: float = 0.85,
-    noise_floor_db: float = -45.0
+    noise_floor_db: float = -45.0,
+    noise_percentile: float = 15.0
 ) -> Tuple[np.ndarray, float]:
     """
     Pure NumPy/SciPy real-time spectral gating noise reduction.
@@ -47,15 +48,16 @@ def spectral_gating_noise_reduction(
     mag = np.abs(Zxx)
     phase = np.angle(Zxx)
     
-    # Estimate noise threshold from lower 15th percentile of energy across time frames
-    noise_est = np.percentile(mag, 15, axis=1, keepdims=True)
+    # Estimate noise threshold from a configurable lower percentile across frames.
+    noise_est = np.percentile(mag, noise_percentile, axis=1, keepdims=True)
     noise_est = np.maximum(noise_est, 1e-8)
     
     # Spectral subtraction mask
     gain = 1.0 - (prop_decrease * noise_est / (mag + 1e-8))
-    # Soft thresholding with floor
-    floor_gain = 10.0 ** (noise_floor_db / 20.0)
-    gain = np.clip(gain, floor_gain, 1.0)
+    # Soft floor prevents over-subtraction and musical-noise artifacts.
+    floor_linear = 10.0 ** (noise_floor_db / 20.0)
+    gain = np.maximum(gain, floor_linear)
+    gain = np.minimum(gain, 1.0)
     
     # Apply mask and reconstruct
     clean_Zxx = (mag * gain) * np.exp(1j * phase)
@@ -85,7 +87,9 @@ def strip_background_noise(
     audio_chunk: np.ndarray,
     sr: int = 16000,
     prop_decrease: float = 0.85,
-    stationary: bool = True
+    stationary: bool = True,
+    noise_percentile: float = 15.0,
+    silence_threshold: float = 1e-4
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
     """
     Strips background noise from an audio chunk.
@@ -99,7 +103,7 @@ def strip_background_noise(
     rms_before = float(np.sqrt(np.mean(audio_chunk ** 2) + 1e-12))
     
     # Bypass for dead silence
-    if rms_before < 1e-4:
+    if rms_before < silence_threshold:
         return audio_chunk, {
             "noise_stripped": False,
             "rms_before": round(rms_before, 6),
@@ -108,10 +112,15 @@ def strip_background_noise(
         }
         
     try:
+        n_fft = int(2 ** np.round(np.log2(sr * 0.032)))
+        hop_length = int(sr * 0.010)
         clean_chunk, attenuation_db = spectral_gating_noise_reduction(
             y=audio_chunk,
             sr=sr,
-            prop_decrease=prop_decrease
+            n_fft=n_fft,
+            hop_length=hop_length,
+            prop_decrease=prop_decrease,
+            noise_percentile=noise_percentile
         )
         rms_after = float(np.sqrt(np.mean(clean_chunk ** 2) + 1e-12))
         
