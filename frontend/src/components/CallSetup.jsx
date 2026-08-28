@@ -73,10 +73,6 @@ export default function CallSetup({
         <h2 className="text-3xl lg:text-4xl font-extrabold text-white tracking-tight">
           AI Voice Impersonation Defense
         </h2>
-        <p className="text-slate-400 text-sm max-w-xl mx-auto mt-2">
-          Continuously evaluates conversational audio stream in 2.5s chunks. Detects neural vocoder phase ripple,
-          linear-frequency (LFCC) spectral anomalies, and synthetic pitch flatness.
-        </p>
       </div>
 
       {/* Step 1: Transaction Context Selection */}
