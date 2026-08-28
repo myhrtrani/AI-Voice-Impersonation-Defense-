@@ -88,8 +88,15 @@ def compute_lfcc(
 def analyze_lfcc_high_freq_artifacts(
     lfcc: np.ndarray,
     log_fb_energies: np.ndarray,
-    n_filters: int = 30
-) -> Dict[str, float]:
+    n_filters: int = 30,
+    f_min: float = 50.0,
+    f_max: float = 8000.0,
+    delta_var_threshold: float = 3.0,
+    high_band_base: float = 0.015,
+    high_band_scale: float = 0.06,
+    cepstral_scale: float = 0.8,
+    weights: tuple = (0.50, 0.25, 0.25)
+) -> Dict[str, Any]:
     """
     Analyzes high-frequency cepstral and spectral regions for neural vocoder artifacts.
     
@@ -100,21 +107,35 @@ def analyze_lfcc_high_freq_artifacts(
             - upper_cepstral_var: Variance of upper LFCC coefficients (coeffs 10-20)
             - lfcc_delta_smoothness: Dynamic variability of frame-to-frame cepstral transitions
     """
-    if lfcc.shape[1] < 2:
+    if len(weights) != 3 or not np.isclose(sum(weights), 1.0):
+        raise ValueError("LFCC anomaly weights must contain three values summing to 1.0")
+    if n_filters < 1 or f_min < 0 or f_max <= f_min:
+        raise ValueError("LFCC frequency and filter parameters are invalid")
+    if high_band_scale <= 0 or cepstral_scale <= 0:
+        raise ValueError("LFCC anomaly scales must be greater than zero")
+    if delta_var_threshold <= 0:
+        raise ValueError("LFCC delta variance threshold must be greater than zero")
+
+    if lfcc.ndim < 2 or lfcc.shape[1] < 2:
         return {
-            "lfcc_artifact_score": 0.0,
+            "lfcc_artifact_score": -1.0,
             "high_band_ratio": 0.0,
             "upper_cepstral_var": 0.0,
-            "lfcc_delta_smoothness": 0.0
+            "lfcc_delta_smoothness": 0.0,
+            "is_valid_duration": False
         }
         
     n_lfcc, n_frames = lfcc.shape
     
-    # 1. Upper linear band energy ratio (upper 40% of linear filters, ~4.8kHz to 8kHz)
-    high_band_start = int(n_filters * 0.60)
-    high_band_power = np.exp(log_fb_energies[high_band_start:, :])
+    # 1. Locate the filter channel nearest the 4800 Hz high-band boundary.
+    filter_centers = np.linspace(f_min, f_max, n_filters + 2)[1:-1]
+    high_band_start = np.searchsorted(filter_centers, 4800.0)
     total_power = np.exp(log_fb_energies)
-    high_band_ratio = float(np.mean(np.sum(high_band_power, axis=0) / (np.sum(total_power, axis=0) + 1e-8)))
+    if high_band_start >= log_fb_energies.shape[0]:
+        high_band_ratio = 0.0
+    else:
+        high_band_power = np.exp(log_fb_energies[high_band_start:, :])
+        high_band_ratio = float(np.mean(np.sum(high_band_power, axis=0) / (np.sum(total_power, axis=0) + 1e-8)))
     
     # 2. Upper cepstral coefficient variance (indices 10 to n_lfcc-1)
     upper_coeffs = lfcc[min(10, n_lfcc - 1):, :]
@@ -127,24 +148,34 @@ def analyze_lfcc_high_freq_artifacts(
     
     # 4. Calibration:
     # High-band anomaly (natural voice has < 0.015 energy above 4.8kHz; vocoders elevate upper energy)
-    high_band_anomaly = np.clip((high_band_ratio - 0.015) / 0.06, 0.0, 1.0)
+    high_band_anomaly = np.clip(
+        (high_band_ratio - high_band_base) / high_band_scale,
+        0.0,
+        1.0
+    )
     
     # Upper cepstral anomaly
-    cepstral_anomaly = np.clip(upper_var / 0.8, 0.0, 1.0)
+    cepstral_anomaly = np.clip(upper_var / cepstral_scale, 0.0, 1.0)
     
     # Dynamic smoothness anomaly (low delta movement in synthetic voice)
-    if delta_variance < 3.0:
-        dyn_anomaly = np.clip((3.0 - delta_variance) / 2.5, 0.0, 1.0)
+    if delta_variance < delta_var_threshold:
+        dyn_anomaly = np.clip((delta_var_threshold - delta_variance) / 2.5, 0.0, 1.0)
     else:
         dyn_anomaly = 0.0
         
     # Blended LFCC artifact score (0.0 - 100.0)
-    raw_lfcc_score = (0.50 * high_band_anomaly + 0.25 * cepstral_anomaly + 0.25 * dyn_anomaly) * 100.0
+    high_band_weight, cepstral_weight, dynamic_weight = weights
+    raw_lfcc_score = (
+        high_band_weight * high_band_anomaly
+        + cepstral_weight * cepstral_anomaly
+        + dynamic_weight * dyn_anomaly
+    ) * 100.0
     lfcc_artifact_score = float(np.clip(raw_lfcc_score, 0.0, 100.0))
     
     return {
         "lfcc_artifact_score": round(lfcc_artifact_score, 2),
         "high_band_ratio": round(high_band_ratio, 4),
         "upper_cepstral_var": round(upper_var, 4),
-        "lfcc_delta_smoothness": round(delta_variance, 4)
+        "lfcc_delta_smoothness": round(delta_variance, 4),
+        "is_valid_duration": True
     }

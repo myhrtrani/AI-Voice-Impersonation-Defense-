@@ -68,12 +68,16 @@ def process_audio_chunk(
         n_lfcc=settings.AUDIO.N_LFCC,
         n_filters=settings.AUDIO.N_FILTERBANKS,
         n_fft=settings.AUDIO.N_FFT,
-        hop_length=settings.AUDIO.HOP_LENGTH
+        hop_length=settings.AUDIO.HOP_LENGTH,
+        f_min=settings.AUDIO.MIN_FREQ,
+        f_max=settings.AUDIO.MAX_FREQ
     )
     lfcc_artifacts = analyze_lfcc_high_freq_artifacts(
         lfcc_matrix,
         log_fb_energies,
-        n_filters=settings.AUDIO.N_FILTERBANKS
+        n_filters=settings.AUDIO.N_FILTERBANKS,
+        f_min=settings.AUDIO.MIN_FREQ,
+        f_max=settings.AUDIO.MAX_FREQ
     )
     lfcc_score = lfcc_artifacts["lfcc_artifact_score"]
 
