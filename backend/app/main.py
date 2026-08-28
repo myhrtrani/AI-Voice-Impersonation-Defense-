@@ -6,6 +6,7 @@ AI-Powered Real-Time Voice Impersonation & Synthetic-Speech Risk Detector.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+import asyncio
 
 from app.config import settings
 from app.db import init_db
@@ -15,7 +16,8 @@ from app.routers import calls, stream, signaling
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: Initialize DB
-    init_db()
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, init_db)
     yield
     # Shutdown logic if needed
 
@@ -28,12 +30,11 @@ app = FastAPI(
 )
 
 # CORS Middleware for local development and front-end integration
-# NOTE FOR DEPLOYMENT: Replace allow_origins=["*"] with your production frontend URL (e.g., https://your-app.vercel.app)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -67,4 +68,12 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+
+    is_production = settings.ENVIRONMENT.lower() == "production"
+    uvicorn.run(
+        "app.main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=not is_production,
+        workers=4 if is_production else 1,
+    )

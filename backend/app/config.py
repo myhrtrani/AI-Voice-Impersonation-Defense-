@@ -4,7 +4,7 @@ All thresholds and weights are centralized here and configurable per environment
 """
 
 from pydantic import BaseModel
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 
 class ScoringConfig(BaseModel):
@@ -68,6 +68,8 @@ class AudioConfig(BaseModel):
 class Settings(BaseModel):
     PROJECT_NAME: str = "AI Voice Impersonation Risk Detector"
     VERSION: str = "1.0.0"
+    ENVIRONMENT: str = "development"
+    ALLOWED_ORIGINS: List[str] = ["*"]
     API_PREFIX: str = "/calls"
     DB_PATH: str = "voice_detector.db"
     ENABLE_NOISE_REDUCTION: bool = True
