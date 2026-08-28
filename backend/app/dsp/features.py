@@ -21,7 +21,7 @@ def extract_pitch_and_jitter(
     fmin: float = 65.0,
     fmax: float = 400.0,
     hop_length: int = 160
-) -> Dict[str, float]:
+) -> Dict[str, Any]:
     """
     Extracts fundamental frequency (F0) pitch variance and detrended micro-jitter.
     
@@ -39,7 +39,13 @@ def extract_pitch_and_jitter(
     - Glitched / noisy audio: > 3.5%
     """
     if len(y) < hop_length * 4:
-        return {"pitch_mean": 0.0, "pitch_variance": 0.0, "jitter": 0.0, "pitch_anomaly_score": 0.0}
+        return {
+            "pitch_mean": 0.0,
+            "pitch_variance": 0.0,
+            "jitter": 0.0,
+            "pitch_anomaly_score": 0.0,
+            "is_valid_duration": False
+        }
         
     try:
         # Fast YIN algorithm for pitch tracking on CPU
@@ -49,7 +55,13 @@ def extract_pitch_and_jitter(
         voiced_f0 = f0[(f0 >= fmin) & (f0 <= fmax) & (~np.isnan(f0))]
         
         if len(voiced_f0) < 5:
-            return {"pitch_mean": 0.0, "pitch_variance": 0.0, "jitter": 0.0, "pitch_anomaly_score": 0.0}
+            return {
+                "pitch_mean": 0.0,
+                "pitch_variance": 0.0,
+                "jitter": 0.0,
+                "pitch_anomaly_score": 0.0,
+                "is_valid_duration": False
+            }
             
         pitch_mean = float(np.mean(voiced_f0))
         pitch_var = float(np.var(voiced_f0))
@@ -76,8 +88,8 @@ def extract_pitch_and_jitter(
         # 2. Hyper-smooth Jitter (< 0.20%) or Extreme Jitter (> 3.5%)
         if jitter < 0.25:
             jitter_anomaly = np.clip((0.25 - jitter) / 0.25, 0.0, 1.0)
-        elif jitter > 3.0:
-            jitter_anomaly = np.clip((jitter - 3.0) / 3.0, 0.0, 1.0)
+        elif jitter > 3.5:
+            jitter_anomaly = np.clip((jitter - 3.5) / 1.5, 0.0, 1.0)
         else:
             jitter_anomaly = 0.0
             
@@ -87,10 +99,17 @@ def extract_pitch_and_jitter(
             "pitch_mean": round(pitch_mean, 2),
             "pitch_variance": round(pitch_var, 2),
             "jitter": round(jitter, 3),
-            "pitch_anomaly_score": round(pitch_anomaly_score, 2)
+            "pitch_anomaly_score": round(pitch_anomaly_score, 2),
+            "is_valid_duration": True
         }
     except Exception:
-        return {"pitch_mean": 0.0, "pitch_variance": 0.0, "jitter": 0.0, "pitch_anomaly_score": 0.0}
+        return {
+            "pitch_mean": 0.0,
+            "pitch_variance": 0.0,
+            "jitter": 0.0,
+            "pitch_anomaly_score": 0.0,
+            "is_valid_duration": False
+        }
 
 
 def extract_spectral_features(
@@ -98,7 +117,7 @@ def extract_spectral_features(
     sr: int = 16000,
     n_fft: int = 512,
     hop_length: int = 160
-) -> Dict[str, float]:
+) -> Dict[str, Any]:
     """
     Extracts speech-band spectral flatness and spectral centroid.
     
@@ -110,15 +129,22 @@ def extract_spectral_features(
     - Vocoder noise / unvoiced hiss / metallic artifacts exhibit elevated flatness (> 0.25).
     """
     if len(y) < n_fft:
-        return {"spectral_flatness": 0.0, "spectral_centroid": 0.0, "spectral_anomaly_score": 0.0}
+        return {
+            "spectral_flatness": 0.0,
+            "spectral_centroid": 0.0,
+            "spectral_anomaly_score": 0.0,
+            "is_valid_duration": False
+        }
         
     try:
         # Compute STFT
         stft = librosa.stft(y, n_fft=n_fft, hop_length=hop_length)
         power_spec = np.abs(stft) ** 2  # (n_fft // 2 + 1, n_frames)
         
-        # Restrict spectral flatness calculation to speech band (0 to 4000 Hz, first 128 bins)
-        speech_bins = min(128, power_spec.shape[0])
+        # Restrict spectral flatness calculation to the 0 to 4000 Hz speech band.
+        speech_band_hz = 4000.0
+        bin_spacing = sr / n_fft
+        speech_bins = min(int(speech_band_hz / bin_spacing) + 1, power_spec.shape[0])
         speech_power = power_spec[:speech_bins, :]
         
         # Geometric mean over speech band with log-domain stability
@@ -151,10 +177,16 @@ def extract_spectral_features(
         return {
             "spectral_flatness": round(mean_flatness, 5),
             "spectral_centroid": round(mean_centroid, 2),
-            "spectral_anomaly_score": round(spectral_anomaly_score, 2)
+            "spectral_anomaly_score": round(spectral_anomaly_score, 2),
+            "is_valid_duration": True
         }
     except Exception:
-        return {"spectral_flatness": 0.0, "spectral_centroid": 0.0, "spectral_anomaly_score": 0.0}
+        return {
+            "spectral_flatness": 0.0,
+            "spectral_centroid": 0.0,
+            "spectral_anomaly_score": 0.0,
+            "is_valid_duration": False
+        }
 
 
 def extract_pause_patterns(
@@ -162,17 +194,17 @@ def extract_pause_patterns(
     sr: int = 16000,
     top_db: float = 30.0,
     hop_length: int = 160
-) -> Dict[str, float]:
+) -> Dict[str, Any]:
     """
     Analyzes silence vs active speech ratio and vocal pause patterns.
     """
-    if len(y) == 0:
-        return {"silence_ratio": 0.0, "active_speech_ratio": 0.0}
+    if len(y) < hop_length * 4:
+        return {"silence_ratio": 0.0, "active_speech_ratio": 0.0, "is_valid_duration": False}
         
     try:
         non_silent = librosa.effects.split(y, top_db=top_db, hop_length=hop_length)
         if len(non_silent) == 0:
-            return {"silence_ratio": 1.0, "active_speech_ratio": 0.0}
+            return {"silence_ratio": 1.0, "active_speech_ratio": 0.0, "is_valid_duration": True}
             
         active_samples = sum(end - start for start, end in non_silent)
         total_samples = len(y)
@@ -181,10 +213,11 @@ def extract_pause_patterns(
         
         return {
             "silence_ratio": round(silence_ratio, 3),
-            "active_speech_ratio": round(active_ratio, 3)
+            "active_speech_ratio": round(active_ratio, 3),
+            "is_valid_duration": True
         }
     except Exception:
-        return {"silence_ratio": 0.0, "active_speech_ratio": 1.0}
+        return {"silence_ratio": 0.0, "active_speech_ratio": 1.0, "is_valid_duration": False}
 
 
 def extract_all_dsp_features(
@@ -196,12 +229,29 @@ def extract_all_dsp_features(
     """
     Comprehensive DSP feature extraction orchestrator for a single audio chunk.
     """
+    is_valid_duration = len(y) >= max(n_fft, hop_length * 4)
     pitch_jitter = extract_pitch_and_jitter(y, sr=sr, hop_length=hop_length)
     spectral = extract_spectral_features(y, sr=sr, n_fft=n_fft, hop_length=hop_length)
     pause = extract_pause_patterns(y, sr=sr, hop_length=hop_length)
+
+    pause_anomaly_score = float(np.clip(
+        np.maximum((0.05 - pause["silence_ratio"]) / 0.05, (pause["silence_ratio"] - 0.65) / 0.35),
+        0.0,
+        1.0
+    ) * 100.0)
+    total_anomaly_score = float(np.clip(
+        0.4 * pitch_jitter["pitch_anomaly_score"]
+        + 0.4 * spectral["spectral_anomaly_score"]
+        + 0.2 * pause_anomaly_score,
+        0.0,
+        100.0
+    ))
     
     return {
         **pitch_jitter,
         **spectral,
-        **pause
+        **pause,
+        "pause_anomaly_score": round(pause_anomaly_score, 2),
+        "total_anomaly_score": round(total_anomaly_score, 2),
+        "is_valid_duration": is_valid_duration
     }
