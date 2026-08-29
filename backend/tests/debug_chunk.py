@@ -30,4 +30,4 @@ for name in ["librispeech_female_clean.wav", "librispeech_speech_clean.wav", "xt
         )
         prev_ewma = scoring_engine.update_rolling_score(risk, prev_ewma)
         alert, sev, act = scoring_engine.evaluate_alert(prev_ewma, transaction_context="general")
-        print(f"Chunk {i+1}: AASIST={m_score:.2f}%, LFCC={lfcc_res['lfcc_artifact_score']:.2f}%, ChunkRisk={risk:.2f}%, EWMARisk={prev_ewma:.2f}%, Severity={sev}, Alert={alert}")
+        print(f"Chunk {i+1}: WavLM={m_score:.2f}%, LFCC={lfcc_res['lfcc_artifact_score']:.2f}%, ChunkRisk={risk:.2f}%, EWMARisk={prev_ewma:.2f}%, Severity={sev}, Alert={alert}")

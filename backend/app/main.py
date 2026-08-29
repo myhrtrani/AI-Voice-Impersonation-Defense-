@@ -53,6 +53,7 @@ async def health_check():
         "status": "healthy",
         "service": settings.PROJECT_NAME,
         "version": settings.VERSION,
+        "model_engine": "Microsoft WavLM-Base Standalone Detector",
         "noise_reduction_enabled": settings.ENABLE_NOISE_REDUCTION,
         "sample_rate": settings.AUDIO.SAMPLE_RATE,
         "chunk_duration_sec": settings.AUDIO.CHUNK_DURATION_SEC,

@@ -16,7 +16,7 @@ import librosa
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app.models.detector import detector
-from app.models.aasist import load_aasist_model, pad_to_aasist_length
+from app.models.aasist import load_wavlm_solo_model, pad_to_aasist_length
 from app.dsp.preprocessor import strip_background_noise
 from app.dsp.lfcc import compute_lfcc, analyze_lfcc_high_freq_artifacts
 from app.dsp.features import extract_all_dsp_features

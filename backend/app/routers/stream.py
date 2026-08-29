@@ -28,7 +28,7 @@ from app.db import (
 from app.dsp.features import extract_all_dsp_features
 from app.dsp.lfcc import analyze_lfcc_high_freq_artifacts, compute_lfcc
 from app.dsp.preprocessor import strip_background_noise
-from app.models.detector import predict_ensemble_async
+from app.models.detector import detector
 from app.scoring.engine import scoring_engine
 
 router = APIRouter(tags=["Stream"])
@@ -52,7 +52,7 @@ async def process_audio_chunk(
 ) -> Dict[str, Any]:
     """
     Core unified processing pipeline for a single 2.5s audio chunk.
-    Runs noise stripping -> DSP & LFCC extraction -> model inference -> risk blend & alert evaluation.
+    Runs noise stripping -> DSP & LFCC extraction -> standalone WavLM inference -> risk blend & alert evaluation.
     """
     # 1. Noise Preprocessing (Mandatory noise stripping)
     if settings.ENABLE_NOISE_REDUCTION:
@@ -89,11 +89,9 @@ async def process_audio_chunk(
         hop_length=settings.AUDIO.HOP_LENGTH
     )
 
-    # 4. Parallel model inference (AASIST-L + frozen WavLM ensemble)
-    ensemble = await predict_ensemble_async(clean_audio)
-    model_score = ensemble["unified_score"]
-    aasist_score = ensemble["aasist_score"]
-    wavlm_score = ensemble["wavlm_score"]
+    # 4. Standalone Pretrained WavLM-Base Model Inference
+    model_score, telemetry = detector.infer(clean_audio, sr=sr)
+    wavlm_score = model_score
 
     # 5. Risk Scoring & Rolling EWMA
     chunk_risk = scoring_engine.compute_chunk_risk_score(
@@ -130,7 +128,6 @@ async def process_audio_chunk(
         "chunk_risk_score": chunk_risk,
         "rolling_risk_score": rolling_risk,
         "model_score": model_score,
-        "aasist_score": aasist_score,
         "wavlm_score": wavlm_score,
         "lfcc_artifact_score": lfcc_score,
         "pitch_variance": dsp_features["pitch_variance"],
@@ -156,7 +153,7 @@ async def process_audio_chunk(
         }
         record_alert(session_id, alert_record)
 
-    # Construct frontend response payload (exact identical shape)
+    # Construct frontend response payload (exact compatible shape)
     return {
         "session_id": session_id,
         "chunk_index": chunk_index,
@@ -169,7 +166,7 @@ async def process_audio_chunk(
         "nominal_window_sec": round(chunk_index * settings.AUDIO.CHUNK_DURATION_SEC, 2),
         "chunk_risk_score": chunk_risk,
         "rolling_risk_score": rolling_risk,
-        "aasist_score": aasist_score,
+        "model_score": model_score,
         "wavlm_score": wavlm_score,
         "unified_score": model_score,
         "status_color": status_color,
@@ -187,7 +184,6 @@ async def process_audio_chunk(
             "silence_ratio": dsp_features["silence_ratio"],
             "lfcc_artifact_score": lfcc_score,
             "model_score": model_score,
-            "aasist_risk_score": aasist_score,
             "wavlm_risk_score": wavlm_score,
             "unified_risk_score": model_score
         },

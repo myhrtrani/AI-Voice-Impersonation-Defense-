@@ -7,4 +7,6 @@ __pycache__/
 voice_detector.db
 dir
 dist/
+uploads/
+backend/uploads/
 
