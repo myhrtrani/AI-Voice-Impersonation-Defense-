@@ -90,11 +90,46 @@ export default function LiveDashboard({
   const chartData = historyData.map((d) => ({
     time: `${d.elapsed_seconds || (d.chunk_index * 2.5)}s`,
     chunkRisk: d.chunk_risk_score,
-    rollingRisk: d.rolling_risk_score
+    rollingRisk: d.rolling_risk_score,
+    pitchVariance: Math.min(100, ((d.features?.pitch_variance || 0) / 200) * 100),
+    jitter: Math.min(100, (d.features?.jitter || 0) / 5 * 100),
+    pauseRatio: (d.features?.silence_ratio || 0) * 100
   }));
 
+  const signalMetrics = [
+    {
+      label: 'Pitch variance',
+      value: features.pitch_variance,
+      unit: 'Hz²',
+      visualValue: Math.min(100, ((features.pitch_variance || 0) / 200) * 100),
+      tone: 'pink'
+    },
+    {
+      label: 'Vocal jitter',
+      value: features.jitter,
+      unit: '%',
+      visualValue: Math.min(100, (features.jitter || 0) / 5 * 100),
+      tone: 'blue'
+    },
+    {
+      label: 'Pause / silence ratio',
+      value: features.silence_ratio !== undefined ? features.silence_ratio * 100 : undefined,
+      unit: '%',
+      visualValue: features.silence_ratio !== undefined ? features.silence_ratio * 100 : 0,
+      tone: 'mint'
+    }
+  ];
+
   return (
-    <div className="max-w-7xl mx-auto py-6 px-4 space-y-6">
+    <div className="max-w-7xl mx-auto py-6 px-4 monitoring-shell space-y-6">
+      <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 border-b border-pink-500/20 pb-4">
+        <div>
+          <div className="command-center-label mb-2">Secure operation / live streams</div>
+          <h2 className="command-title text-white">Live Monitoring</h2>
+          <p className="text-slate-400 text-sm mt-2">Real-time spectral analysis and synthesis detection.</p>
+        </div>
+        <div className="cyber-status"><span className="inline-block w-2 h-2 rounded-full bg-pink-500 mr-2 animate-pulse"></span>STATUS: SYSTEM NOMINAL</div>
+      </div>
       {/* Top Stream Control Bar */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 rounded-xl bg-slate-900/90 border border-slate-800 backdrop-blur-md">
         <div className="flex items-center gap-3">
@@ -105,7 +140,7 @@ export default function LiveDashboard({
           <div>
             <div className="flex items-center gap-2">
               <span className="text-xs font-bold text-white uppercase tracking-wider">
-                Mode A Stream Replay
+                Active Stream
               </span>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-cyan-400 border border-slate-700">
                 ID: {sessionId}
@@ -141,6 +176,25 @@ export default function LiveDashboard({
             <PhoneOff className="w-4 h-4" />
             <span>End Call</span>
           </button>
+        </div>
+      </div>
+
+      {/* Score fusion numerics */}
+      <div className="score-grid">
+        <div className="score-card score-card-muted">
+          <span className="command-center-label">AASIST-L / acoustic</span>
+          <strong>{liveMetrics?.aasist_score !== undefined ? `${Math.round(liveMetrics.aasist_score)}%` : '--'}</strong>
+          <small>Raw waveform branch</small>
+        </div>
+        <div className="score-card score-card-muted">
+          <span className="command-center-label">WavLM / contextual</span>
+          <strong>{liveMetrics?.wavlm_score !== undefined ? `${Math.round(liveMetrics.wavlm_score)}%` : '--'}</strong>
+          <small>Frozen representation branch</small>
+        </div>
+        <div className="score-card score-card-primary">
+          <span className="command-center-label">Unified / max accuracy</span>
+          <strong>{liveMetrics?.unified_score !== undefined ? `${Math.round(liveMetrics.unified_score)}%` : '--'}</strong>
+          <small>Weighted threat probability</small>
         </div>
       </div>
 
@@ -265,6 +319,46 @@ export default function LiveDashboard({
           <div className="text-[11px] font-mono text-slate-500 flex justify-between pt-3 border-t border-slate-800">
             <span>Threshold automatically shifts for "{transactionContext}" context</span>
             <span>Real-Time Ingestion: 16kHz Mono</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Backend-connected audio extraction telemetry */}
+      <div className="signal-panel">
+        <div className="signal-panel-heading">
+          <div>
+            <span className="command-center-label">Audio extraction / live frames</span>
+            <h3>Prosody & pause analysis</h3>
+            <p>Each point is a processed audio chunk from the active stream.</p>
+          </div>
+          <span className="cyber-status">{historyData.length} FRAMES INGESTED</span>
+        </div>
+
+        <div className="signal-layout">
+          <div className="signal-chart">
+            {chartData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData}>
+                  <CartesianGrid strokeDasharray="2 5" stroke="#ff3399" opacity={0.12} />
+                  <XAxis dataKey="time" stroke="#a6a0a2" fontSize={10} />
+                  <YAxis domain={[0, 100]} stroke="#a6a0a2" fontSize={10} />
+                  <Tooltip contentStyle={{ backgroundColor: '#0a0a0a', borderColor: '#ff3399', color: '#fff', fontSize: '11px' }} />
+                  <Line type="monotone" dataKey="pitchVariance" name="Pitch variance" stroke="#ff3399" strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="jitter" name="Jitter" stroke="#91a7f5" strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="pauseRatio" name="Pause / silence" stroke="#8fd7c1" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="signal-empty">WAITING FOR AUDIO FRAMES</div>
+            )}
+          </div>
+          <div className="signal-metrics">
+            {signalMetrics.map((metric) => (
+              <div className="signal-metric" key={metric.label}>
+                <div className="signal-metric-top"><span>{metric.label}</span><b>{metric.value !== undefined ? `${Number(metric.value).toFixed(metric.unit === '%' ? 1 : 2)}${metric.unit}` : '--'}</b></div>
+                <div className={`signal-meter ${metric.tone}`}><span style={{ width: `${metric.visualValue}%` }} /></div>
+              </div>
+            ))}
           </div>
         </div>
       </div>

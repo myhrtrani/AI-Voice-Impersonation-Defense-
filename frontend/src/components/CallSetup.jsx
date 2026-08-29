@@ -10,7 +10,6 @@ import {
   Play, 
   ArrowRight,
   Radio,
-  Zap,
   Users
 } from 'lucide-react';
 
@@ -63,22 +62,26 @@ export default function CallSetup({
   };
 
   return (
-    <div className="max-w-5xl mx-auto py-8 px-4">
+    <div className="max-w-6xl mx-auto py-8 px-4">
       {/* Hero Title */}
-      <div className="text-center mb-10">
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-cyan-950/80 border border-cyan-500/30 text-cyan-400 text-xs font-mono mb-3">
-          <Zap className="w-3.5 h-3.5" />
-          <span>REAL-TIME MULTI-BAND ACOUSTIC INFERENCE</span>
+      <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-8 border-b border-cyan-500/20 pb-5">
+        <div>
+          <div className="command-center-label mb-3">Live streams / new session</div>
+          <h2 className="command-title text-white tracking-tight">
+            Monitoring Command Center
+          </h2>
+          <p className="text-slate-400 text-sm mt-2">Configure a protected voice channel for real-time integrity analysis.</p>
         </div>
-        <h2 className="text-3xl lg:text-4xl font-extrabold text-white tracking-tight">
-          AI Voice Impersonation Defense
-        </h2>
+        <div className="hidden md:block text-right cyber-status">
+          <span className="block text-slate-400 text-[10px] mb-1">ENGINE STATUS</span>
+          SYSTEM NOMINAL
+        </div>
       </div>
 
       {/* Step 1: Transaction Context Selection */}
       <div className="mb-8">
         <label className="block text-xs font-mono uppercase tracking-widest text-slate-400 mb-3">
-          Step 1: Select Transaction Risk Context
+          Workflow: Select transaction risk context
         </label>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
           {contexts.map((ctx) => {
@@ -114,118 +117,31 @@ export default function CallSetup({
         <div className="flex items-center justify-between border-b border-slate-800 pb-5 mb-6">
           <div>
             <label className="block text-xs font-mono uppercase tracking-widest text-slate-400">
-              Step 2: Choose Call Mode
+              Channel: Choose an intake mode
             </label>
             <div className="flex gap-4 mt-2">
               <button
                 onClick={() => setActiveTab('mode_a')}
                 className={`text-lg font-bold pb-2 ${activeTab === 'mode_a' ? 'text-cyan-400 border-b-2 border-cyan-400' : 'text-slate-400 hover:text-slate-300'}`}
               >
-                Mode A (Replay)
+                Mode A (Live WebRTC)
               </button>
               <button
                 onClick={() => setActiveTab('mode_b')}
                 className={`text-lg font-bold pb-2 ${activeTab === 'mode_b' ? 'text-cyan-400 border-b-2 border-cyan-400' : 'text-slate-400 hover:text-slate-300'}`}
               >
-                Mode B (Live WebRTC)
+                Mode B (Replay)
               </button>
             </div>
           </div>
         </div>
 
-        {/* Tab Content: Mode A (Upload & Simulated Replay) */}
+        {/* Tab Content: Mode A (Primary Live WebRTC Call) */}
         {activeTab === 'mode_a' && (
-          <div className="space-y-6">
-            {/* Custom Upload Dropzone */}
-            <div className="border-2 border-dashed border-slate-700 hover:border-cyan-500/50 rounded-xl p-6 text-center bg-slate-950/30 transition">
-              <UploadCloud className="w-8 h-8 text-cyan-400 mx-auto mb-2" />
-              <p className="text-xs font-semibold text-white">Upload Call Audio File (.wav, .mp3, .ogg)</p>
-              <p className="text-[11px] text-slate-400 mt-1">Backend will simulate real-time live streaming playback</p>
-              
-              <input
-                type="file"
-                id="audio-upload"
-                accept=".wav,.mp3,.ogg,.m4a,.webm"
-                onChange={handleFileUpload}
-                className="hidden"
-              />
-              <label
-                htmlFor="audio-upload"
-                className="mt-3 inline-block px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 text-xs font-mono cursor-pointer border border-slate-700"
-              >
-                {selectedFile ? selectedFile.name : 'Browse Audio Files'}
-              </label>
-
-              {selectedFile && (
-                <div className="mt-4">
-                  <button
-                    type="button"
-                    disabled={loading}
-                    onClick={() => onStartModeA(selectedFile)}
-                    className="py-2.5 px-6 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs uppercase tracking-wider transition shadow-lg inline-flex items-center gap-2 cursor-pointer disabled:opacity-50"
-                  >
-                    <Play className="w-4 h-4 fill-current" />
-                    <span>{loading ? 'Uploading...' : `Stream & Analyze "${selectedFile.name}"`}</span>
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Quick Demo Presets */}
-            <div>
-              <label className="block text-xs font-mono uppercase tracking-widest text-slate-400 mb-2.5">
-                Or Instant-Test With Calibrated Demo Clips:
-              </label>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <button
-                  type="button"
-                  disabled={loading}
-                  onClick={() => onStartModeA('sample_human_clean.wav')}
-                  className="p-3.5 rounded-xl border border-emerald-500/30 bg-emerald-950/20 hover:bg-emerald-950/40 text-left transition cursor-pointer"
-                >
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-bold text-emerald-400">1. Authentic Human</span>
-                    <FileAudio className="w-4 h-4 text-emerald-400" />
-                  </div>
-                  <p className="text-[11px] text-slate-400 leading-snug">Natural formant intonation & vocal jitter (SAFE ~ 20%).</p>
-                </button>
-
-                <button
-                  type="button"
-                  disabled={loading}
-                  onClick={() => onStartModeA('sample_human_noisy.wav')}
-                  className="p-3.5 rounded-xl border border-yellow-500/30 bg-yellow-950/20 hover:bg-yellow-950/40 text-left transition cursor-pointer"
-                >
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-bold text-yellow-400">2. Noisy Human Voice</span>
-                    <FileAudio className="w-4 h-4 text-yellow-400" />
-                  </div>
-                  <p className="text-[11px] text-slate-400 leading-snug">Tests noise stripping preventing false alarms (SAFE ~ 25%).</p>
-                </button>
-
-                <button
-                  type="button"
-                  disabled={loading}
-                  onClick={() => onStartModeA('sample_synthetic_clone.wav')}
-                  className="p-3.5 rounded-xl border border-red-500/30 bg-red-950/20 hover:bg-red-950/40 text-left transition cursor-pointer"
-                >
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-bold text-red-400">3. AI Voice Clone (TTS)</span>
-                    <FileAudio className="w-4 h-4 text-red-400" />
-                  </div>
-                  <p className="text-[11px] text-slate-400 leading-snug">Triggers LFCC upper-band anomaly (CRITICAL &gt; 80%).</p>
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Tab Content: Mode B (Live WebRTC Call) */}
-        {activeTab === 'mode_b' && (
           <div className="space-y-6">
             <div className="border-2 border-dashed border-slate-700 rounded-xl p-6 text-center bg-slate-950/30">
               <PhoneCall className="w-8 h-8 text-cyan-400 mx-auto mb-2" />
-              <p className="text-xs font-semibold text-white">Browser-to-Browser Live Call</p>
+              <p className="text-xs font-semibold text-white">Primary channel: Browser-to-Browser Live Call</p>
               <p className="text-[11px] text-slate-400 mt-1 max-w-sm mx-auto">
                 Uses WebRTC and live microphone capture. Audio is streamed to the backend in 2.5s chunks for real-time analysis.
               </p>
@@ -257,6 +173,37 @@ export default function CallSetup({
                     Join Room
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Tab Content: Mode B (Replay) */}
+        {activeTab === 'mode_b' && (
+          <div className="space-y-6">
+            <div className="border-2 border-dashed border-slate-700 hover:border-cyan-500/50 rounded-xl p-6 text-center bg-slate-950/30 transition">
+              <UploadCloud className="w-8 h-8 text-cyan-400 mx-auto mb-2" />
+              <p className="text-xs font-semibold text-white">Upload Call Audio File (.wav, .mp3, .ogg)</p>
+              <p className="text-[11px] text-slate-400 mt-1">Replay a recording through the same real-time analysis pipeline</p>
+              <input type="file" id="audio-upload" accept=".wav,.mp3,.ogg,.m4a,.webm" onChange={handleFileUpload} className="hidden" />
+              <label htmlFor="audio-upload" className="mt-3 inline-block px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 text-xs font-mono cursor-pointer border border-slate-700">
+                {selectedFile ? selectedFile.name : 'Browse Audio Files'}
+              </label>
+              {selectedFile && (
+                <div className="mt-4">
+                  <button type="button" disabled={loading} onClick={() => onStartModeA(selectedFile)} className="py-2.5 px-6 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs uppercase tracking-wider transition shadow-lg inline-flex items-center gap-2 cursor-pointer disabled:opacity-50">
+                    <Play className="w-4 h-4 fill-current" />
+                    <span>{loading ? 'Uploading...' : `Replay & Analyze "${selectedFile.name}"`}</span>
+                  </button>
+                </div>
+              )}
+            </div>
+            <div>
+              <label className="block text-xs font-mono uppercase tracking-widest text-slate-400 mb-2.5">Instant-test with calibrated clips:</label>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <button type="button" disabled={loading} onClick={() => onStartModeA('sample_human_clean.wav')} className="p-3.5 rounded-xl border border-emerald-500/30 bg-emerald-950/20 hover:bg-emerald-950/40 text-left transition cursor-pointer"><span className="text-xs font-bold text-emerald-400">1. Authentic Human</span><p className="text-[11px] text-slate-400 mt-1">Natural speech baseline.</p></button>
+                <button type="button" disabled={loading} onClick={() => onStartModeA('sample_human_noisy.wav')} className="p-3.5 rounded-xl border border-yellow-500/30 bg-yellow-950/20 hover:bg-yellow-950/40 text-left transition cursor-pointer"><span className="text-xs font-bold text-yellow-400">2. Noisy Human Voice</span><p className="text-[11px] text-slate-400 mt-1">Noise-reduction test.</p></button>
+                <button type="button" disabled={loading} onClick={() => onStartModeA('sample_synthetic_clone.wav')} className="p-3.5 rounded-xl border border-red-500/30 bg-red-950/20 hover:bg-red-950/40 text-left transition cursor-pointer"><span className="text-xs font-bold text-red-400">3. AI Voice Clone</span><p className="text-[11px] text-slate-400 mt-1">Synthetic speech test.</p></button>
               </div>
             </div>
           </div>

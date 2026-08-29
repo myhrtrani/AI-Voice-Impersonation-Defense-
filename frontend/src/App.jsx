@@ -4,6 +4,9 @@ import CallSetup from './components/CallSetup';
 import LiveDashboard from './components/LiveDashboard';
 import PostCallSummary from './components/PostCallSummary';
 import ProductionScalePanel from './components/ProductionScalePanel';
+import Sidebar from './components/Sidebar';
+import ApiManagement from './components/ApiManagement';
+import SessionLog from './components/SessionLog';
 
 export default function App() {
   const [viewState, setViewState] = useState('setup'); // 'setup', 'live', 'summary'
@@ -15,6 +18,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState(null);
   const [isScalePanelOpen, setIsScalePanelOpen] = useState(false);
+  const [activePage, setActivePage] = useState('dashboard');
 
   // Live Call Streaming Telemetry
   const [liveMetrics, setLiveMetrics] = useState(null);
@@ -364,10 +368,38 @@ export default function App() {
     setHistoryData([]);
     setSummaryData(null);
     setErrorMessage(null);
+    setActivePage('dashboard');
+  };
+
+  const handleNavigate = (page) => {
+    setActivePage(page);
+    if (page === 'dashboard' || page === 'workflow') {
+      if (viewState !== 'live') setViewState('setup');
+    }
+    if (page === 'session-log') {
+      if (viewState !== 'live') setViewState('summary');
+    }
+  };
+
+  const handleNewSession = () => {
+    cleanupStreams();
+    setViewState('setup');
+    setSessionId(null);
+    setCallMode(null);
+    setLiveMetrics(null);
+    setHistoryData([]);
+    setSummaryData(null);
+    setErrorMessage(null);
+    setActivePage('dashboard');
   };
 
   return (
     <div className="clay-app min-h-screen flex flex-col bg-slate-950 text-slate-100">
+      <Sidebar
+        activePage={activePage}
+        onNavigate={handleNavigate}
+        onNewSession={handleNewSession}
+      />
       {/* Top Navigation */}
       <Navbar
         transactionContext={transactionContext}
@@ -405,7 +437,7 @@ export default function App() {
           />
         )}
 
-        {viewState === 'setup' && (
+        {viewState === 'setup' && (activePage === 'dashboard' || activePage === 'workflow') && (
           <CallSetup
             onStartModeA={handleStartModeA}
             onStartModeB={handleStartModeB}
@@ -415,7 +447,7 @@ export default function App() {
           />
         )}
 
-        {viewState === 'live' && (
+        {viewState === 'live' && (activePage === 'dashboard' || activePage === 'workflow') && (
           <LiveDashboard
             sessionId={sessionId}
             mode={callMode}
@@ -428,7 +460,15 @@ export default function App() {
           />
         )}
 
-        {viewState === 'summary' && (
+        {viewState === 'summary' && activePage === 'session-log' && (
+          <SessionLog
+            summaryData={summaryData}
+            historyData={historyData}
+            onStartNew={handleNewSession}
+          />
+        )}
+
+        {viewState === 'summary' && activePage !== 'session-log' && (
           <PostCallSummary
             summaryData={summaryData}
             historyData={historyData}
@@ -436,6 +476,8 @@ export default function App() {
             thresholds={thresholds}
           />
         )}
+
+        {activePage === 'api-management' && <ApiManagement />}
       </main>
 
       {/* Production Scale Architecture Panel (Modal) */}
