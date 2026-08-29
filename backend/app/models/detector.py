@@ -14,12 +14,94 @@ Production Pipeline:
 
 import os
 import time
+import asyncio
+import threading
 import numpy as np
 import scipy.signal
 import torch
 from typing import Dict, Any, Tuple
 
-from app.models.aasist import AASIST_L, load_aasist_model, pad_to_aasist_length
+from app.models.aasist import AASIST_L, load_aasist_model, load_fusion_model, pad_to_aasist_length
+
+
+_fusion_model = None
+_fusion_model_lock = threading.Lock()
+
+
+def _get_fusion_model():
+    global _fusion_model
+    if _fusion_model is None:
+        with _fusion_model_lock:
+            if _fusion_model is None:
+                _fusion_model = load_fusion_model()
+    return _fusion_model
+
+
+def _standardized_audio_tensor(audio_data: np.ndarray) -> torch.Tensor:
+    padded_audio = pad_to_aasist_length(audio_data, max_len=64600)
+    return torch.from_numpy(padded_audio.astype(np.float32)).unsqueeze(0)
+
+
+def run_aasist_inference(audio_data: np.ndarray) -> torch.Tensor:
+    """Run the cached standalone AASIST branch on standardized audio."""
+    model = _get_fusion_model().aasist
+    tensor_input = _standardized_audio_tensor(audio_data)
+    with torch.no_grad():
+        _, logits = model(tensor_input)
+    return logits.cpu()
+
+
+def run_wavlm_inference(audio_data: np.ndarray) -> torch.Tensor:
+    """Run the cached frozen WavLM branch and its two-class head."""
+    model = _get_fusion_model()
+    tensor_input = _standardized_audio_tensor(audio_data)
+    with torch.no_grad():
+        frame_embeddings = model.wavlm(input_values=tensor_input).last_hidden_state
+        mean_embeddings = frame_embeddings.mean(dim=1)
+        std_embeddings = frame_embeddings.var(dim=1, unbiased=False).add(1e-6).sqrt()
+        logits = model.wavlm_classifier(torch.cat([mean_embeddings, std_embeddings], dim=-1))
+    return logits.cpu()
+
+
+def fuse_scores(
+    aasist_logits: torch.Tensor,
+    wavlm_logits: torch.Tensor,
+    weight_aasist: float = 0.4,
+    weight_wavlm: float = 0.6
+) -> Dict[str, Any]:
+    """Fuse spoof probabilities, where class index 0 is the spoof class."""
+    if weight_aasist < 0 or weight_wavlm < 0 or not np.isclose(weight_aasist + weight_wavlm, 1.0):
+        raise ValueError("Ensemble weights must be non-negative and sum to 1.0")
+
+    aasist_probabilities = torch.softmax(torch.as_tensor(aasist_logits), dim=-1)
+    wavlm_probabilities = torch.softmax(torch.as_tensor(wavlm_logits), dim=-1)
+    aasist_probability = float(aasist_probabilities[..., 0].reshape(-1)[0].item())
+    wavlm_probability = float(wavlm_probabilities[..., 0].reshape(-1)[0].item())
+    final_probability = weight_aasist * aasist_probability + weight_wavlm * wavlm_probability
+
+    return {
+        "aasist_probability": aasist_probability,
+        "wavlm_probability": wavlm_probability,
+        "final_probability": final_probability,
+        "aasist_score": round(aasist_probability * 100.0, 2),
+        "wavlm_score": round(wavlm_probability * 100.0, 2),
+        "unified_score": round(final_probability * 100.0, 2),
+        "aasist_logits": torch.as_tensor(aasist_logits).reshape(-1, 2)[0].tolist(),
+        "wavlm_logits": torch.as_tensor(wavlm_logits).reshape(-1, 2)[0].tolist()
+    }
+
+
+async def predict_ensemble_async(
+    audio_data: np.ndarray,
+    weight_aasist: float = 0.4,
+    weight_wavlm: float = 0.6
+) -> Dict[str, Any]:
+    """Run AASIST-L and WavLM concurrently without blocking the event loop."""
+    loop = asyncio.get_running_loop()
+    task_aasist = loop.run_in_executor(None, run_aasist_inference, audio_data)
+    task_wavlm = loop.run_in_executor(None, run_wavlm_inference, audio_data)
+    aasist_logits, wavlm_logits = await asyncio.gather(task_aasist, task_wavlm)
+    return fuse_scores(aasist_logits, wavlm_logits, weight_aasist, weight_wavlm)
 
 
 class SyntheticVoiceDetector:

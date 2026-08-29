@@ -28,7 +28,7 @@ from app.db import (
 from app.dsp.features import extract_all_dsp_features
 from app.dsp.lfcc import analyze_lfcc_high_freq_artifacts, compute_lfcc
 from app.dsp.preprocessor import strip_background_noise
-from app.models.detector import detector
+from app.models.detector import predict_ensemble_async
 from app.scoring.engine import scoring_engine
 
 router = APIRouter(tags=["Stream"])
@@ -36,7 +36,7 @@ router = APIRouter(tags=["Stream"])
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "uploads")
 
 
-def process_audio_chunk(
+async def process_audio_chunk(
     audio_data: np.ndarray,
     sr: int,
     session_id: str,
@@ -89,8 +89,11 @@ def process_audio_chunk(
         hop_length=settings.AUDIO.HOP_LENGTH
     )
 
-    # 4. Model Inference (Acoustic & Neural Vocoder Classifier)
-    model_score, model_telemetry = detector.infer(clean_audio, sr=sr)
+    # 4. Parallel model inference (AASIST-L + frozen WavLM ensemble)
+    ensemble = await predict_ensemble_async(clean_audio)
+    model_score = ensemble["unified_score"]
+    aasist_score = ensemble["aasist_score"]
+    wavlm_score = ensemble["wavlm_score"]
 
     # 5. Risk Scoring & Rolling EWMA
     chunk_risk = scoring_engine.compute_chunk_risk_score(
@@ -127,6 +130,8 @@ def process_audio_chunk(
         "chunk_risk_score": chunk_risk,
         "rolling_risk_score": rolling_risk,
         "model_score": model_score,
+        "aasist_score": aasist_score,
+        "wavlm_score": wavlm_score,
         "lfcc_artifact_score": lfcc_score,
         "pitch_variance": dsp_features["pitch_variance"],
         "pitch_mean": dsp_features["pitch_mean"],
@@ -164,6 +169,9 @@ def process_audio_chunk(
         "nominal_window_sec": round(chunk_index * settings.AUDIO.CHUNK_DURATION_SEC, 2),
         "chunk_risk_score": chunk_risk,
         "rolling_risk_score": rolling_risk,
+        "aasist_score": aasist_score,
+        "wavlm_score": wavlm_score,
+        "unified_score": model_score,
         "status_color": status_color,
         "severity": severity,
         "alert_fired": should_alert,
@@ -178,7 +186,10 @@ def process_audio_chunk(
             "spectral_centroid": dsp_features["spectral_centroid"],
             "silence_ratio": dsp_features["silence_ratio"],
             "lfcc_artifact_score": lfcc_score,
-            "model_score": model_score
+            "model_score": model_score,
+            "aasist_risk_score": aasist_score,
+            "wavlm_risk_score": wavlm_score,
+            "unified_risk_score": model_score
         },
         "is_complete": False
     }
@@ -240,7 +251,7 @@ async def websocket_stream_endpoint(websocket: WebSocket, session_id: str):
                 chunk_index += 1
                 elapsed_audio = min(total_duration_sec, start_sample / target_sr + actual_chunk_duration)
 
-                payload = process_audio_chunk(
+                payload = await process_audio_chunk(
                     audio_data=audio_chunk,
                     sr=target_sr,
                     session_id=session_id,
@@ -310,7 +321,7 @@ async def websocket_stream_endpoint(websocket: WebSocket, session_id: str):
                 chunk_index += 1
                 elapsed = chunk_index * chunk_duration
 
-                payload = process_audio_chunk(
+                payload = await process_audio_chunk(
                     audio_data=audio_chunk,
                     sr=target_sr,
                     session_id=session_id,

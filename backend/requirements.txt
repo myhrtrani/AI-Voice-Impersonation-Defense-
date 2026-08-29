@@ -10,3 +10,4 @@ noisereduce>=3.0.0
 aiosqlite>=0.20.0
 requests>=2.31.0
 pytest>=8.0.0
+transformers>=4.45.0

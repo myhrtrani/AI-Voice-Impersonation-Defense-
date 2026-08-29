@@ -6,13 +6,14 @@ MIT license
 
 import os
 import random
-from typing import Union, Dict, Any, Tuple
+from typing import Union, Dict, Any, Tuple, Optional
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+from transformers import WavLMModel
 
 
 class GraphAttentionLayer(nn.Module):
@@ -612,6 +613,89 @@ class Model(nn.Module):
 AASIST_L = Model
 
 
+class WavLMAASISTFusion(nn.Module):
+    """Fuse frozen WavLM speech representations with the AASIST-L detector.
+
+    The AASIST branch emits two-class logits from the 64,600-sample waveform.
+    WavLM-base emits 768-dimensional frame embeddings; attentive statistics
+    pooling concatenates their mean and standard deviation (1,536 dimensions),
+    then an MLP produces a second two-class logit vector. The final logits are
+    a trainable softmax-weighted average of both branch logits.
+    """
+
+    def __init__(
+        self,
+        d_args: Dict[str, Any],
+        wavlm_name: str = "microsoft/wavlm-base"
+    ):
+        super().__init__()
+        self.aasist = Model(d_args)
+        self.wavlm = WavLMModel.from_pretrained(wavlm_name)
+        for param in self.wavlm.parameters():
+            param.requires_grad = False
+        self.wavlm.eval()
+
+        hidden_size = self.wavlm.config.hidden_size
+        self.wavlm_classifier = nn.Sequential(
+            nn.LayerNorm(hidden_size * 2),
+            nn.Linear(hidden_size * 2, 128),
+            nn.SELU(inplace=True),
+            nn.Dropout(0.1),
+            nn.Linear(128, 2)
+        )
+        self.fusion_weights = nn.Parameter(torch.log(torch.tensor([0.5, 0.5])))
+
+    @staticmethod
+    def _standardize_audio(x: Tensor, target_length: int = 64600) -> Tensor:
+        if x.ndim == 1:
+            x = x.unsqueeze(0)
+        elif x.ndim == 3 and x.size(1) == 1:
+            x = x.squeeze(1)
+        if x.ndim != 2:
+            raise ValueError("Audio input must have shape (batch, samples)")
+
+        sample_count = x.size(1)
+        if sample_count == 0:
+            raise ValueError("Audio input cannot be empty")
+        if sample_count >= target_length:
+            return x[:, :target_length]
+
+        repeats = (target_length + sample_count - 1) // sample_count
+        return x.repeat(1, repeats)[:, :target_length]
+
+    def forward(self, x: Tensor, Freq_aug: bool = False):
+        x = self._standardize_audio(x)
+        aasist_hidden, aasist_logits = self.aasist(x, Freq_aug=Freq_aug)
+
+        with torch.no_grad():
+            wavlm_output = self.wavlm(input_values=x)
+        frame_embeddings = wavlm_output.last_hidden_state
+        mean_embeddings = frame_embeddings.mean(dim=1)
+        std_embeddings = frame_embeddings.var(dim=1, unbiased=False).add(1e-6).sqrt()
+        wavlm_logits = self.wavlm_classifier(
+            torch.cat([mean_embeddings, std_embeddings], dim=-1)
+        )
+
+        branch_weights = torch.softmax(self.fusion_weights, dim=0)
+        fused_logits = (
+            branch_weights[0] * aasist_logits
+            + branch_weights[1] * wavlm_logits
+        )
+        return aasist_hidden, fused_logits
+
+
+def _aasist_d_args() -> Dict[str, Any]:
+    return {
+        "architecture": "AASIST",
+        "nb_samp": 64600,
+        "first_conv": 128,
+        "filts": [70, [1, 32], [32, 32], [32, 24], [24, 24]],
+        "gat_dims": [24, 32],
+        "pool_ratios": [0.4, 0.5, 0.7, 0.5],
+        "temperatures": [2.0, 2.0, 100.0, 100.0]
+    }
+
+
 def pad_to_aasist_length(x: np.ndarray, max_len: int = 64600) -> np.ndarray:
     """
     Official AASIST variable-length input padding/truncation protocol.
@@ -645,15 +729,7 @@ def load_aasist_model(weights_path: str = None):
     if not weights_path or not os.path.exists(weights_path):
         raise FileNotFoundError(f"AASIST-L weights not found at: {weights_path}")
 
-    d_args = {
-        "architecture": "AASIST",
-        "nb_samp": 64600,
-        "first_conv": 128,
-        "filts": [70, [1, 32], [32, 32], [32, 24], [24, 24]],
-        "gat_dims": [24, 32],
-        "pool_ratios": [0.4, 0.5, 0.7, 0.5],
-        "temperatures": [2.0, 2.0, 100.0, 100.0]
-    }
+    d_args = _aasist_d_args()
 
     model = Model(d_args)
     param_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -667,3 +743,37 @@ def load_aasist_model(weights_path: str = None):
 
     file_size = os.path.getsize(weights_path)
     return model, param_count, file_size
+
+
+def load_fusion_model(aasist_weights_path: Optional[str] = None):
+    """Load AASIST-L and the pretrained WavLM-base fusion model.
+
+    The returned module has the same ``(last_hidden, logits)`` output contract
+    as :class:`Model`; logits have shape ``(batch_size, 2)``. WavLM weights are
+    downloaded and cached by Transformers on first use.
+    """
+    weights_path = aasist_weights_path
+    if weights_path is None or not os.path.exists(weights_path):
+        candidate_paths = [
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "weights", "AASIST-L.pth")),
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "models", "weights", "AASIST-L.pth")),
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "models", "weights", "AASIST-L.pth")),
+            weights_path
+        ]
+        for path in candidate_paths:
+            if path and os.path.exists(path):
+                weights_path = path
+                break
+
+    if not weights_path or not os.path.exists(weights_path):
+        raise FileNotFoundError(f"AASIST-L weights not found at: {weights_path}")
+
+    model = WavLMAASISTFusion(_aasist_d_args())
+    state_dict = torch.load(weights_path, map_location="cpu", weights_only=True)
+    cleaned_state = {k.replace("module.", "").replace("model.", ""): v for k, v in state_dict.items()}
+    try:
+        model.aasist.load_state_dict(cleaned_state, strict=True)
+    except RuntimeError:
+        model.aasist.load_state_dict(cleaned_state, strict=False)
+    model.eval()
+    return model
