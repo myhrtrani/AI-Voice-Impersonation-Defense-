@@ -346,13 +346,18 @@ export default function App() {
         if (resp.ok) {
           const data = await resp.json();
           setSummaryData(data);
+          setViewState('summary');
+        } else {
+          console.error('Failed to load summary, server returned:', resp.status);
+          setErrorMessage(`Failed to load summary (Server Error ${resp.status})`);
         }
       } catch (err) {
         console.error('Failed to load summary:', err);
+        setErrorMessage(`Failed to load summary: ${err.message}`);
       }
+    } else {
+      setViewState('summary');
     }
-
-    setViewState('summary');
   };
 
   const handleReset = () => {
