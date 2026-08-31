@@ -47,9 +47,16 @@ class RiskScoringEngine:
         w_pitch = self.config.WEIGHT_PITCH_JITTER
         w_spec = self.config.WEIGHT_SPECTRAL
 
+        # Use fixed configured feature weights (data-driven fusion preferred).
+        # Hand-crafted adaptive shifting of weights was removed to ensure
+        # scoring behavior is driven by validation/learned calibration rather
+        # than a hard-coded rule.
+        w_model_eff = w_model
+        w_lfcc_eff = w_lfcc
+
         score = (
-            w_model * model_score +
-            w_lfcc * lfcc_artifact_score +
+            w_model_eff * model_score +
+            w_lfcc_eff * lfcc_artifact_score +
             w_pitch * pitch_anomaly_score +
             w_spec * spectral_anomaly_score
         )

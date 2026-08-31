@@ -31,11 +31,38 @@ from app.dsp.lfcc import analyze_lfcc_high_freq_artifacts, compute_lfcc
 from app.dsp.preprocessor import strip_background_noise
 from app.models.detector import detector
 from app.scoring.engine import scoring_engine
+from app.scoring.calibrated import Calibrator, agg_mean
+import joblib
 
 router = APIRouter(tags=["Stream"])
 logger = get_logger("voice_defense.stream")
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "uploads")
+
+# Cached calibrator singleton (lazy-loaded when feature flag enabled)
+_CALIBRATOR = None
+
+
+def _get_calibrator():
+    global _CALIBRATOR
+    if not settings.USE_CALIBRATED_SCORING:
+        return None
+    if _CALIBRATOR is not None:
+        return _CALIBRATOR
+    path = settings.CALIBRATOR_PATH
+    try:
+        if os.path.exists(path):
+            cal = Calibrator()
+            cal.load(path)
+            _CALIBRATOR = cal
+            logger.info("Loaded calibrator from %s", path)
+            return _CALIBRATOR
+        else:
+            logger.warning("Calibrator path does not exist: %s", path)
+            return None
+    except Exception as e:
+        logger.warning("Failed to load calibrator: %s", e)
+        return None
 
 
 def process_audio_chunk(
@@ -47,6 +74,7 @@ def process_audio_chunk(
     previous_severity: str,
     transaction_context: str,
     elapsed_seconds: float,
+    context_audio: Optional[np.ndarray] = None,
     actual_chunk_duration_sec: float = 2.5,
     actual_chunk_samples: int = 40000,
     total_audio_duration_sec: float = 2.5,
@@ -91,9 +119,27 @@ def process_audio_chunk(
         )
 
         # 4. Model Inference (Acoustic & Neural Vocoder Classifier)
-        model_score, model_telemetry = detector.infer(clean_audio, sr=sr)
+        # Prefer providing the detector with a longer recent-context buffer
+        # when available so the pretrained AASIST model sees continuous
+        # real audio instead of a single short repeated chunk.
+        model_input = clean_audio if context_audio is None else context_audio
+        model_score, model_telemetry = detector.infer(model_input, sr=sr)
 
-        # 5. Risk Scoring & Rolling EWMA
+        # 5. Calibrated scoring (optional) -- compute window-level calibrated probability
+        calibrated_prob = None
+        if settings.USE_CALIBRATED_SCORING:
+            try:
+                # Attempt to load calibrator from configured path (cached globally by endpoint)
+                # The websocket endpoint maintains a module-level _CALIBRATOR instance.
+                cal = _get_calibrator()
+                if cal is not None:
+                    Xw = [[float(model_score), float(lfcc_score), float(dsp_features['pitch_anomaly_score']), float(dsp_features['spectral_anomaly_score'])]]
+                    probs = cal.predict_window_probs(Xw)
+                    calibrated_prob = float(probs[0]) if probs else None
+            except Exception as e:
+                logger.warning("Calibrator predict failed: %s", e)
+
+        # 6. Risk Scoring & Rolling EWMA
         chunk_risk = scoring_engine.compute_chunk_risk_score(
             model_score=model_score,
             lfcc_artifact_score=lfcc_score,
@@ -134,6 +180,7 @@ def process_audio_chunk(
             pitch_variance=dsp_features["pitch_variance"],
             jitter=dsp_features["jitter"],
             spectral_flatness=dsp_features["spectral_flatness"],
+            calibrated_prob=calibrated_prob,
             status_color=status_color,
             severity=severity,
             alert_fired=should_alert,
@@ -202,7 +249,8 @@ def process_audio_chunk(
                 "spectral_centroid": dsp_features["spectral_centroid"],
                 "silence_ratio": dsp_features["silence_ratio"],
                 "lfcc_artifact_score": lfcc_score,
-                "model_score": model_score
+                "model_score": model_score,
+                "calibrated_prob": calibrated_prob
             },
             "is_complete": False
         }
@@ -243,6 +291,8 @@ async def websocket_stream_endpoint(websocket: WebSocket, session_id: str):
     previous_rolling_score = None
     previous_severity = "NORMAL"
     chunk_index = 0
+    # Per-session recent audio context buffer (keeps last ~64600 samples for model)
+    context_buffer = np.zeros(0, dtype=np.float32)
 
     try:
         if mode == "mode_a_upload":
@@ -261,20 +311,27 @@ async def websocket_stream_endpoint(websocket: WebSocket, session_id: str):
             y, sr = librosa.load(audio_path, sr=target_sr, mono=True)
             total_samples = len(y)
             total_duration_sec = total_samples / target_sr
-            num_chunks = max(1, int(np.ceil(total_samples / chunk_samples)))
+            hop = max(1, chunk_samples // 2)
+            if total_samples <= chunk_samples:
+                num_windows = 1
+            else:
+                num_windows = 1 + int(np.ceil((total_samples - chunk_samples) / float(hop)))
 
-            logger.info("Audio loaded: duration=%.2fs (%d samples), total_chunks=%d", total_duration_sec, total_samples, num_chunks)
+            logger.info("Audio loaded: duration=%.2fs (%d samples), total_windows=%d (hop=%d)", total_duration_sec, total_samples, num_windows, hop)
 
-            # Stream chunks sequentially
-            for i in range(num_chunks):
-                start_sample = i * chunk_samples
+            # Session-level calibrated window probabilities (for final mean aggregation)
+            session_cal_probs = []
+
+            # Stream sliding windows sequentially (50% overlap)
+            for i in range(num_windows):
+                start_sample = i * hop
                 end_sample = min(start_sample + chunk_samples, total_samples)
                 raw_chunk = y[start_sample:end_sample]
                 actual_chunk_samples = len(raw_chunk)
                 actual_chunk_duration = actual_chunk_samples / target_sr
                 is_padded = False
 
-                # Pad short trailing chunk if needed
+                # Pad short trailing chunk if needed (zero-padding)
                 if actual_chunk_samples < chunk_samples:
                     audio_chunk = np.pad(raw_chunk, (0, chunk_samples - actual_chunk_samples), mode='constant')
                     is_padded = True
@@ -284,6 +341,10 @@ async def websocket_stream_endpoint(websocket: WebSocket, session_id: str):
                 chunk_index += 1
                 elapsed_audio = min(total_duration_sec, start_sample / target_sr + actual_chunk_duration)
 
+                # Build contiguous recent context buffer ending at window end
+                ctx_start = max(0, end_sample - 64600)
+                context_buffer = y[ctx_start:end_sample]
+
                 payload = process_audio_chunk(
                     audio_data=audio_chunk,
                     sr=target_sr,
@@ -292,6 +353,7 @@ async def websocket_stream_endpoint(websocket: WebSocket, session_id: str):
                     previous_rolling_score=previous_rolling_score,
                     previous_severity=previous_severity,
                     transaction_context=transaction_context,
+                    context_audio=context_buffer,
                     elapsed_seconds=elapsed_audio,
                     actual_chunk_duration_sec=actual_chunk_duration,
                     actual_chunk_samples=actual_chunk_samples,
@@ -299,22 +361,40 @@ async def websocket_stream_endpoint(websocket: WebSocket, session_id: str):
                     is_padded=is_padded
                 )
 
+                # track calibrated per-window probs
+                try:
+                    calp = payload.get('features', {}).get('calibrated_prob', None)
+                    if calp is not None:
+                        session_cal_probs.append(float(calp))
+                except Exception:
+                    pass
+
                 previous_rolling_score = payload["rolling_risk_score"]
                 previous_severity = payload["severity"]
 
-                # Mark last chunk
-                if i == num_chunks - 1:
+                # Mark last window
+                if i == num_windows - 1:
                     payload["is_complete"] = True
-                    logger.info("Mode A stream completed for session: %s (Total chunks=%d, Peak risk=%.1f%%)", session_id, chunk_index, payload["rolling_risk_score"])
+                    # compute final calibrated mean if available
+                    final_cal_mean = float(np.mean(session_cal_probs)) if session_cal_probs else None
+                    payload['final_calibrated_mean'] = final_cal_mean
+                    if final_cal_mean is not None:
+                        payload['final_calibrated_pred'] = 1 if final_cal_mean >= 0.5 else 0
+                        payload['final_calibrated_percent'] = final_cal_mean * 100.0
+                        payload['final_calibrated_crosses_threshold'] = (final_cal_mean * 100.0) >= settings.SCORING.HIGH_RISK_MIN
+                    logger.info("Mode A stream completed for session: %s (Total windows=%d, Peak risk=%.1f%%)", session_id, chunk_index, payload["rolling_risk_score"])
 
                 await websocket.send_json(payload)
 
-                # Real-time replay pacing (1.8s for smooth UI transition)
-                await asyncio.sleep(1.8)
+                # Real-time replay pacing (shorter due to overlap)
+                await asyncio.sleep(max(0.5, chunk_duration * 0.75))
 
         else:
             # Mode B: Receive live audio chunks from client over WebSocket
             logger.info("Starting Mode B live stream listener for session: %s", session_id)
+            live_buffer = np.zeros(0, dtype=np.float32)
+            session_cal_probs = []
+            hop = max(1, chunk_samples // 2)
             while True:
                 data = await websocket.receive()
                 if "bytes" in data:
@@ -335,7 +415,51 @@ async def websocket_stream_endpoint(websocket: WebSocket, session_id: str):
                     msg = json.loads(data["text"])
                     if msg.get("action") == "end_call":
                         logger.info("Mode B live call end received for session: %s", session_id)
-                        await websocket.send_json({"is_complete": True, "message": "Call ended"})
+                        # If there is leftover live_buffer, process one final padded window
+                        try:
+                            if 'live_buffer' in locals() and len(live_buffer) > 0:
+                                last = live_buffer
+                                if len(last) < chunk_samples:
+                                    last = np.pad(last, (0, chunk_samples - len(last)), mode='constant')
+                                chunk_index += 1
+                                payload = process_audio_chunk(
+                                    audio_data=last,
+                                    sr=target_sr,
+                                    session_id=session_id,
+                                    chunk_index=chunk_index,
+                                    previous_rolling_score=previous_rolling_score,
+                                    previous_severity=previous_severity,
+                                    transaction_context=transaction_context,
+                                    context_audio=context_buffer,
+                                    elapsed_seconds=chunk_index * chunk_duration,
+                                    actual_chunk_duration_sec=(len(last) / float(target_sr)),
+                                    actual_chunk_samples=len(last),
+                                    total_audio_duration_sec=None,
+                                    is_padded=(len(last) > len(live_buffer))
+                                )
+                                try:
+                                    calp = payload.get('features', {}).get('calibrated_prob', None)
+                                    if calp is not None:
+                                        session_cal_probs.append(float(calp))
+                                except Exception:
+                                    pass
+                                previous_rolling_score = payload.get('rolling_risk_score', previous_rolling_score)
+                                previous_severity = payload.get('severity', previous_severity)
+                                await websocket.send_json(payload)
+                        except Exception as e:
+                            logger.warning("Error processing final live buffer: %s", e)
+
+                        # compute final calibrated mean and return
+                        final_cal_mean = float(np.mean(session_cal_probs)) if ('session_cal_probs' in locals() and session_cal_probs) else None
+                        final_msg = {"is_complete": True, "message": "Call ended"}
+                        if final_cal_mean is not None:
+                            final_msg.update({
+                                'final_calibrated_mean': final_cal_mean,
+                                'final_calibrated_pred': 1 if final_cal_mean >= 0.5 else 0,
+                                'final_calibrated_percent': final_cal_mean * 100.0,
+                                'final_calibrated_crosses_threshold': (final_cal_mean * 100.0) >= settings.SCORING.HIGH_RISK_MIN
+                            })
+                        await websocket.send_json(final_msg)
                         break
                     elif msg.get("action") == "update_context":
                         transaction_context = msg.get("context", "general")
@@ -357,24 +481,51 @@ async def websocket_stream_endpoint(websocket: WebSocket, session_id: str):
                 else:
                     continue
 
-                chunk_index += 1
-                elapsed = chunk_index * chunk_duration
+                # Append to live buffer and sliding-window process
+                live_buffer = np.concatenate([live_buffer, audio_chunk])
+                # also maintain a contiguous context buffer (last 64600 samples)
+                context_buffer = np.concatenate([context_buffer, audio_chunk])
+                if len(context_buffer) > 64600:
+                    context_buffer = context_buffer[-64600:]
 
-                payload = process_audio_chunk(
-                    audio_data=audio_chunk,
-                    sr=target_sr,
-                    session_id=session_id,
-                    chunk_index=chunk_index,
-                    previous_rolling_score=previous_rolling_score,
-                    previous_severity=previous_severity,
-                    transaction_context=transaction_context,
-                    elapsed_seconds=elapsed
-                )
+                # Process as many full sliding windows as available
+                while len(live_buffer) >= chunk_samples:
+                    window = live_buffer[:chunk_samples]
+                    is_padded = False
+                    chunk_index += 1
+                    elapsed = chunk_index * chunk_duration
 
-                previous_rolling_score = payload["rolling_risk_score"]
-                previous_severity = payload["severity"]
+                    payload = process_audio_chunk(
+                        audio_data=window,
+                        sr=target_sr,
+                        session_id=session_id,
+                        chunk_index=chunk_index,
+                        previous_rolling_score=previous_rolling_score,
+                        previous_severity=previous_severity,
+                        transaction_context=transaction_context,
+                        context_audio=context_buffer,
+                        elapsed_seconds=elapsed,
+                        actual_chunk_duration_sec=(chunk_samples / float(target_sr)),
+                        actual_chunk_samples=chunk_samples,
+                        total_audio_duration_sec=None,
+                        is_padded=is_padded
+                    )
 
-                await websocket.send_json(payload)
+                    # track calibrated per-window probs
+                    try:
+                        calp = payload.get('features', {}).get('calibrated_prob', None)
+                        if calp is not None:
+                            session_cal_probs.append(float(calp))
+                    except Exception:
+                        pass
+
+                    previous_rolling_score = payload["rolling_risk_score"]
+                    previous_severity = payload["severity"]
+
+                    await websocket.send_json(payload)
+
+                    # advance buffer by hop (50% overlap)
+                    live_buffer = live_buffer[hop:]
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected normally for session: %s (Total chunks=%d)", session_id, chunk_index)

@@ -146,6 +146,7 @@ def log_analysis_chunk(
     status_color: str,
     severity: str,
     alert_fired: bool,
+    calibrated_prob: Optional[float] = None,
     latency_ms: Optional[float] = None
 ):
     """
@@ -153,10 +154,11 @@ def log_analysis_chunk(
     """
     ana_logger = get_analysis_logger()
     latency_str = f" | Latency={latency_ms:.1f}ms" if latency_ms is not None else ""
+    cal_str = f" | CalProb={calibrated_prob:.3f}" if calibrated_prob is not None else ""
     ana_logger.info(
         f"[SESSION:{session_id}] Chunk #{chunk_index:03d} | Risk={rolling_risk:5.1f}% (raw={chunk_risk:5.1f}%) "
         f"| Model={model_score:5.1f}% | LFCC={lfcc_score:5.1f}% | PitchVar={pitch_variance:6.1f} | Jitter={jitter:5.3f} "
-        f"| SpecFlat={spectral_flatness:5.3f} | Status={status_color.upper()} | Severity={severity} | Alert={alert_fired}{latency_str}"
+        f"| SpecFlat={spectral_flatness:5.3f}{cal_str} | Status={status_color.upper()} | Severity={severity} | Alert={alert_fired}{latency_str}"
     )
 
 

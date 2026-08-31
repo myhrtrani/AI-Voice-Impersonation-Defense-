@@ -73,6 +73,10 @@ class Settings(BaseModel):
     LOG_DIR: str = "logs"
     LOG_LEVEL: str = "INFO"
     ENABLE_NOISE_REDUCTION: bool = True
+    # Feature flag to enable calibrated logistic fusion (mean aggregation)
+    USE_CALIBRATED_SCORING: bool = False
+    # Path to persisted calibrator (joblib) used when USE_CALIBRATED_SCORING is True
+    CALIBRATOR_PATH: str = "models/calibrator.joblib"
     SCORING: ScoringConfig = ScoringConfig()
     AUDIO: AudioConfig = AudioConfig()
 

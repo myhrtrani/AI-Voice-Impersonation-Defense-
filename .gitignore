@@ -16,4 +16,9 @@ backend/uploads/
 dir
 dist/
 
+# Ignore generated calibrator artifacts and temp worktree used for verification
+models/*.joblib
+*.joblib
+temp_worktree_verify/
+
 
