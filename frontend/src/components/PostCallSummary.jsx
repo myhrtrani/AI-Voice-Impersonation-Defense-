@@ -22,13 +22,11 @@ import {
   ReferenceLine 
 } from 'recharts';
 
-export default function PostCallSummary({ summaryData, historyData, onReset, thresholds }) {
-  if (!summaryData) return null;
-
-  const peakRisk = summaryData.peak_risk || 0;
-  const avgRisk = summaryData.avg_risk || 0;
-  const totalChunks = summaryData.total_chunks || historyData.length;
-  const alerts = summaryData.alerts || [];
+export default function PostCallSummary({ summaryData, historyData = [], onReset, thresholds }) {
+  const peakRisk = summaryData?.peak_risk ?? (historyData.length > 0 ? Math.max(...historyData.map(h => h.rolling_risk_score || 0)) : 0);
+  const avgRisk = summaryData?.avg_risk ?? (historyData.length > 0 ? (historyData.reduce((acc, h) => acc + (h.rolling_risk_score || 0), 0) / historyData.length) : 0);
+  const totalChunks = summaryData?.total_chunks || historyData.length;
+  const alerts = summaryData?.alerts || [];
   const durationSec = totalChunks * 2.5;
 
   const highMin = thresholds?.high_min || 70;

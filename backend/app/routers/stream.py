@@ -20,6 +20,7 @@ import soundfile as sf
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.config import settings
+from app.logger import get_logger, log_analysis_chunk, log_crash
 from app.db import (
     get_session_summary,
     record_alert,
@@ -32,6 +33,7 @@ from app.models.detector import detector
 from app.scoring.engine import scoring_engine
 
 router = APIRouter(tags=["Stream"])
+logger = get_logger("voice_defense.stream")
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "uploads")
 
@@ -54,130 +56,170 @@ def process_audio_chunk(
     Core unified processing pipeline for a single 2.5s audio chunk.
     Runs noise stripping -> DSP & LFCC extraction -> model inference -> risk blend & alert evaluation.
     """
-    # 1. Noise Preprocessing (Mandatory noise stripping)
-    if settings.ENABLE_NOISE_REDUCTION:
-        clean_audio, noise_meta = strip_background_noise(audio_data, sr=sr)
-    else:
-        clean_audio = audio_data
-        noise_meta = {"noise_stripped": False}
+    t_start = time.perf_counter()
 
-    # 2. Linear Frequency Cepstral Coefficients (LFCC) Extraction
-    lfcc_matrix, log_fb_energies = compute_lfcc(
-        clean_audio,
-        sr=sr,
-        n_lfcc=settings.AUDIO.N_LFCC,
-        n_filters=settings.AUDIO.N_FILTERBANKS,
-        n_fft=settings.AUDIO.N_FFT,
-        hop_length=settings.AUDIO.HOP_LENGTH
-    )
-    lfcc_artifacts = analyze_lfcc_high_freq_artifacts(
-        lfcc_matrix,
-        log_fb_energies,
-        n_filters=settings.AUDIO.N_FILTERBANKS
-    )
-    lfcc_score = lfcc_artifacts["lfcc_artifact_score"]
+    try:
+        # 1. Noise Preprocessing (Mandatory noise stripping)
+        if settings.ENABLE_NOISE_REDUCTION:
+            clean_audio, noise_meta = strip_background_noise(audio_data, sr=sr)
+        else:
+            clean_audio = audio_data
+            noise_meta = {"noise_stripped": False}
 
-    # 3. Standard DSP Feature Extraction (Pitch variance, Jitter, Flatness, Centroid, Silence)
-    dsp_features = extract_all_dsp_features(
-        clean_audio,
-        sr=sr,
-        n_fft=settings.AUDIO.N_FFT,
-        hop_length=settings.AUDIO.HOP_LENGTH
-    )
+        # 2. Linear Frequency Cepstral Coefficients (LFCC) Extraction
+        lfcc_matrix, log_fb_energies = compute_lfcc(
+            clean_audio,
+            sr=sr,
+            n_lfcc=settings.AUDIO.N_LFCC,
+            n_filters=settings.AUDIO.N_FILTERBANKS,
+            n_fft=settings.AUDIO.N_FFT,
+            hop_length=settings.AUDIO.HOP_LENGTH
+        )
+        lfcc_artifacts = analyze_lfcc_high_freq_artifacts(
+            lfcc_matrix,
+            log_fb_energies,
+            n_filters=settings.AUDIO.N_FILTERBANKS
+        )
+        lfcc_score = lfcc_artifacts["lfcc_artifact_score"]
 
-    # 4. Model Inference (Acoustic & Neural Vocoder Classifier)
-    model_score, model_telemetry = detector.infer(clean_audio, sr=sr)
+        # 3. Standard DSP Feature Extraction (Pitch variance, Jitter, Flatness, Centroid, Silence)
+        dsp_features = extract_all_dsp_features(
+            clean_audio,
+            sr=sr,
+            n_fft=settings.AUDIO.N_FFT,
+            hop_length=settings.AUDIO.HOP_LENGTH
+        )
 
-    # 5. Risk Scoring & Rolling EWMA
-    chunk_risk = scoring_engine.compute_chunk_risk_score(
-        model_score=model_score,
-        lfcc_artifact_score=lfcc_score,
-        pitch_anomaly_score=dsp_features["pitch_anomaly_score"],
-        spectral_anomaly_score=dsp_features["spectral_anomaly_score"]
-    )
+        # 4. Model Inference (Acoustic & Neural Vocoder Classifier)
+        model_score, model_telemetry = detector.infer(clean_audio, sr=sr)
 
-    rolling_risk = scoring_engine.update_rolling_score(
-        current_chunk_score=chunk_risk,
-        previous_rolling_score=previous_rolling_score
-    )
+        # 5. Risk Scoring & Rolling EWMA
+        chunk_risk = scoring_engine.compute_chunk_risk_score(
+            model_score=model_score,
+            lfcc_artifact_score=lfcc_score,
+            pitch_anomaly_score=dsp_features["pitch_anomaly_score"],
+            spectral_anomaly_score=dsp_features["spectral_anomaly_score"]
+        )
 
-    # 6. Alert & Action Evaluation
-    should_alert, severity, recommended_action = scoring_engine.evaluate_alert(
-        rolling_risk_score=rolling_risk,
-        transaction_context=transaction_context,
-        previous_severity=previous_severity
-    )
+        rolling_risk = scoring_engine.update_rolling_score(
+            current_chunk_score=chunk_risk,
+            previous_rolling_score=previous_rolling_score
+        )
 
-    # Determine UI status color
-    if rolling_risk >= settings.SCORING.HIGH_RISK_MIN:
-        status_color = "red"
-    elif rolling_risk >= settings.SCORING.LOW_RISK_MAX:
-        status_color = "yellow"
-    else:
-        status_color = "green"
+        # 6. Alert & Action Evaluation
+        should_alert, severity, recommended_action = scoring_engine.evaluate_alert(
+            rolling_risk_score=rolling_risk,
+            transaction_context=transaction_context,
+            previous_severity=previous_severity
+        )
 
-    # Assemble comprehensive metric dict
-    metric_record = {
-        "chunk_index": chunk_index,
-        "timestamp": time.time(),
-        "chunk_risk_score": chunk_risk,
-        "rolling_risk_score": rolling_risk,
-        "model_score": model_score,
-        "lfcc_artifact_score": lfcc_score,
-        "pitch_variance": dsp_features["pitch_variance"],
-        "pitch_mean": dsp_features["pitch_mean"],
-        "jitter": dsp_features["jitter"],
-        "spectral_flatness": dsp_features["spectral_flatness"],
-        "spectral_centroid": dsp_features["spectral_centroid"],
-        "silence_ratio": dsp_features["silence_ratio"],
-        "noise_stripped": noise_meta.get("noise_stripped", True)
-    }
+        # Determine UI status color
+        if rolling_risk >= settings.SCORING.HIGH_RISK_MIN:
+            status_color = "red"
+        elif rolling_risk >= settings.SCORING.LOW_RISK_MAX:
+            status_color = "yellow"
+        else:
+            status_color = "green"
 
-    # Save to database
-    record_chunk_metric(session_id, metric_record)
+        latency_ms = (time.perf_counter() - t_start) * 1000.0
 
-    if should_alert and severity != "NORMAL":
-        alert_record = {
+        # Log structured chunk analysis to analysis.log
+        log_analysis_chunk(
+            session_id=session_id,
+            chunk_index=chunk_index,
+            chunk_risk=chunk_risk,
+            rolling_risk=rolling_risk,
+            model_score=model_score,
+            lfcc_score=lfcc_score,
+            pitch_variance=dsp_features["pitch_variance"],
+            jitter=dsp_features["jitter"],
+            spectral_flatness=dsp_features["spectral_flatness"],
+            status_color=status_color,
+            severity=severity,
+            alert_fired=should_alert,
+            latency_ms=latency_ms
+        )
+
+        # Assemble comprehensive metric dict
+        metric_record = {
             "chunk_index": chunk_index,
             "timestamp": time.time(),
-            "severity": severity,
-            "risk_score": rolling_risk,
-            "transaction_context": transaction_context,
-            "recommended_action": recommended_action
-        }
-        record_alert(session_id, alert_record)
-
-    # Construct frontend response payload (exact identical shape)
-    return {
-        "session_id": session_id,
-        "chunk_index": chunk_index,
-        "timestamp": metric_record["timestamp"],
-        "elapsed_seconds": round(elapsed_seconds, 2),
-        "actual_chunk_duration": round(actual_chunk_duration_sec, 2),
-        "actual_chunk_samples": actual_chunk_samples,
-        "total_audio_duration": round(total_audio_duration_sec, 2),
-        "is_padded": is_padded,
-        "nominal_window_sec": round(chunk_index * settings.AUDIO.CHUNK_DURATION_SEC, 2),
-        "chunk_risk_score": chunk_risk,
-        "rolling_risk_score": rolling_risk,
-        "status_color": status_color,
-        "severity": severity,
-        "alert_fired": should_alert,
-        "recommended_action": recommended_action,
-        "transaction_context": transaction_context,
-        "noise_stripped": noise_meta.get("noise_stripped", True),
-        "features": {
+            "chunk_risk_score": chunk_risk,
+            "rolling_risk_score": rolling_risk,
+            "model_score": model_score,
+            "lfcc_artifact_score": lfcc_score,
             "pitch_variance": dsp_features["pitch_variance"],
             "pitch_mean": dsp_features["pitch_mean"],
             "jitter": dsp_features["jitter"],
             "spectral_flatness": dsp_features["spectral_flatness"],
             "spectral_centroid": dsp_features["spectral_centroid"],
             "silence_ratio": dsp_features["silence_ratio"],
-            "lfcc_artifact_score": lfcc_score,
-            "model_score": model_score
-        },
-        "is_complete": False
-    }
+            "noise_stripped": noise_meta.get("noise_stripped", True)
+        }
+
+        # Save to database
+        record_chunk_metric(session_id, metric_record)
+
+        if should_alert and severity != "NORMAL":
+            alert_record = {
+                "chunk_index": chunk_index,
+                "timestamp": time.time(),
+                "severity": severity,
+                "risk_score": rolling_risk,
+                "transaction_context": transaction_context,
+                "recommended_action": recommended_action
+            }
+            record_alert(session_id, alert_record)
+            logger.warning(
+                "ALERT TRIGGERED [%s] Session=%s Chunk=#%d Risk=%.1f%% Action='%s'",
+                severity, session_id, chunk_index, rolling_risk, recommended_action
+            )
+
+        # Construct frontend response payload (exact identical shape)
+        return {
+            "session_id": session_id,
+            "chunk_index": chunk_index,
+            "timestamp": metric_record["timestamp"],
+            "elapsed_seconds": round(elapsed_seconds, 2),
+            "actual_chunk_duration": round(actual_chunk_duration_sec, 2),
+            "actual_chunk_samples": actual_chunk_samples,
+            "total_audio_duration": round(total_audio_duration_sec, 2),
+            "is_padded": is_padded,
+            "nominal_window_sec": round(chunk_index * settings.AUDIO.CHUNK_DURATION_SEC, 2),
+            "chunk_risk_score": chunk_risk,
+            "rolling_risk_score": rolling_risk,
+            "status_color": status_color,
+            "severity": severity,
+            "alert_fired": should_alert,
+            "recommended_action": recommended_action,
+            "transaction_context": transaction_context,
+            "noise_stripped": noise_meta.get("noise_stripped", True),
+            "features": {
+                "pitch_variance": dsp_features["pitch_variance"],
+                "pitch_mean": dsp_features["pitch_mean"],
+                "jitter": dsp_features["jitter"],
+                "spectral_flatness": dsp_features["spectral_flatness"],
+                "spectral_centroid": dsp_features["spectral_centroid"],
+                "silence_ratio": dsp_features["silence_ratio"],
+                "lfcc_artifact_score": lfcc_score,
+                "model_score": model_score
+            },
+            "is_complete": False
+        }
+
+    except Exception as e:
+        log_crash(
+            e,
+            context=f"Audio Chunk Processing Failure (Session: {session_id}, Chunk: #{chunk_index})",
+            extra_details={
+                "session_id": session_id,
+                "chunk_index": chunk_index,
+                "samples_count": len(audio_data),
+                "sampling_rate": sr,
+                "context": transaction_context
+            }
+        )
+        raise e
 
 
 @router.websocket("/calls/{session_id}/stream")
@@ -188,6 +230,7 @@ async def websocket_stream_endpoint(websocket: WebSocket, session_id: str):
     Mode B (client-streamed live chunk analysis).
     """
     await websocket.accept()
+    logger.info("WebSocket connected for session: %s", session_id)
 
     session = get_session_summary(session_id)
     transaction_context = session["transaction_context"] if session else "general"
@@ -206,16 +249,21 @@ async def websocket_stream_endpoint(websocket: WebSocket, session_id: str):
             # Mode A: Locate uploaded file and stream simulated chunks
             matching_files = glob.glob(os.path.join(UPLOAD_DIR, f"{session_id}.*"))
             if not matching_files:
-                await websocket.send_json({"error": "Audio file for session not found"})
+                err_msg = f"Audio file for session {session_id} not found in uploads directory"
+                logger.error(err_msg)
+                await websocket.send_json({"error": err_msg})
                 await websocket.close()
                 return
 
             audio_path = matching_files[0]
+            logger.info("Starting Mode A audio stream replay from: %s", audio_path)
             # Load audio resampled to 16kHz mono
             y, sr = librosa.load(audio_path, sr=target_sr, mono=True)
             total_samples = len(y)
             total_duration_sec = total_samples / target_sr
             num_chunks = max(1, int(np.ceil(total_samples / chunk_samples)))
+
+            logger.info("Audio loaded: duration=%.2fs (%d samples), total_chunks=%d", total_duration_sec, total_samples, num_chunks)
 
             # Stream chunks sequentially
             for i in range(num_chunks):
@@ -257,6 +305,7 @@ async def websocket_stream_endpoint(websocket: WebSocket, session_id: str):
                 # Mark last chunk
                 if i == num_chunks - 1:
                     payload["is_complete"] = True
+                    logger.info("Mode A stream completed for session: %s (Total chunks=%d, Peak risk=%.1f%%)", session_id, chunk_index, payload["rolling_risk_score"])
 
                 await websocket.send_json(payload)
 
@@ -265,6 +314,7 @@ async def websocket_stream_endpoint(websocket: WebSocket, session_id: str):
 
         else:
             # Mode B: Receive live audio chunks from client over WebSocket
+            logger.info("Starting Mode B live stream listener for session: %s", session_id)
             while True:
                 data = await websocket.receive()
                 if "bytes" in data:
@@ -276,17 +326,20 @@ async def websocket_stream_endpoint(websocket: WebSocket, session_id: str):
                             audio_chunk = np.mean(audio_chunk, axis=1)  # Stereo to mono
                         if sr != target_sr:
                             audio_chunk = librosa.resample(audio_chunk, orig_sr=sr, target_sr=target_sr)
-                    except Exception:
+                    except Exception as decode_err:
                         # Fallback for raw float32 / int16 PCM bytes
+                        logger.warning("Soundfile decode failed (%s), falling back to raw PCM", decode_err)
                         audio_chunk = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
 
                 elif "text" in data:
                     msg = json.loads(data["text"])
                     if msg.get("action") == "end_call":
+                        logger.info("Mode B live call end received for session: %s", session_id)
                         await websocket.send_json({"is_complete": True, "message": "Call ended"})
                         break
                     elif msg.get("action") == "update_context":
                         transaction_context = msg.get("context", "general")
+                        logger.info("Mode B context updated to '%s' for session: %s", transaction_context, session_id)
                         continue
                     elif "audio_base64" in msg:
                         raw_bytes = base64.b64decode(msg["audio_base64"])
@@ -296,7 +349,8 @@ async def websocket_stream_endpoint(websocket: WebSocket, session_id: str):
                                 audio_chunk = np.mean(audio_chunk, axis=1)
                             if sr != target_sr:
                                 audio_chunk = librosa.resample(audio_chunk, orig_sr=sr, target_sr=target_sr)
-                        except Exception:
+                        except Exception as decode_err:
+                            logger.warning("Base64 soundfile decode failed (%s), falling back to raw PCM", decode_err)
                             audio_chunk = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
                     else:
                         continue
@@ -323,9 +377,14 @@ async def websocket_stream_endpoint(websocket: WebSocket, session_id: str):
                 await websocket.send_json(payload)
 
     except WebSocketDisconnect:
-        pass
+        logger.info("WebSocket disconnected normally for session: %s (Total chunks=%d)", session_id, chunk_index)
     except Exception as e:
+        log_crash(
+            e,
+            context=f"WebSocket Stream Pipeline Crash (Session: {session_id}, Mode: {mode})",
+            extra_details={"session_id": session_id, "mode": mode, "chunk_index": chunk_index}
+        )
         try:
-            await websocket.send_json({"error": str(e)})
+            await websocket.send_json({"error": str(e), "message": "Streaming error occurred. Full trace logged to error.log"})
         except Exception:
             pass

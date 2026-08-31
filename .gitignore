@@ -1,10 +1,19 @@
 venv/
+venv312/
+ashhack/
 node_modules/
 __pycache__/
 *.pyc
 .env
 .env.*
 voice_detector.db
+*.db
+logs/
+backend/logs/
+uploads/
+backend/uploads/
+*.log
 dir
 dist/
+
 

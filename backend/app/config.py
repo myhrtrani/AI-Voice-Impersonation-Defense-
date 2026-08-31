@@ -70,9 +70,12 @@ class Settings(BaseModel):
     VERSION: str = "1.0.0"
     API_PREFIX: str = "/calls"
     DB_PATH: str = "voice_detector.db"
+    LOG_DIR: str = "logs"
+    LOG_LEVEL: str = "INFO"
     ENABLE_NOISE_REDUCTION: bool = True
     SCORING: ScoringConfig = ScoringConfig()
     AUDIO: AudioConfig = AudioConfig()
 
 
 settings = Settings()
+
