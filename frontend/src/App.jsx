@@ -22,6 +22,7 @@ export default function App() {
   const [summaryData, setSummaryData] = useState(null);
 
   // WebSockets and Media References
+  const sessionIdRef = useRef(null);
   const wsStreamRef = useRef(null);
   const pcRef = useRef(null);
   const signalingWsRef = useRef(null);
@@ -111,6 +112,7 @@ export default function App() {
 
       const data = await resp.json();
       const currentSessionId = data.session_id;
+      sessionIdRef.current = currentSessionId;
       setSessionId(currentSessionId);
       setCallMode('mode_a_upload');
       setViewState('live');
@@ -147,6 +149,7 @@ export default function App() {
         if (data.ice_servers) iceServers = data.ice_servers;
       }
 
+      sessionIdRef.current = currentSessionId;
       setSessionId(currentSessionId);
       setCallMode('mode_b_live');
       setViewState('live');
@@ -301,7 +304,7 @@ export default function App() {
       setHistoryData((prev) => [...prev, data]);
 
       if (data.is_complete) {
-        handleEndCall();
+        handleEndCall(currentSessionId);
       }
     };
 
@@ -320,9 +323,10 @@ export default function App() {
   // Dynamic context change during live call
   const handleChangeContext = async (newCtx) => {
     setTransactionContext(newCtx);
-    if (sessionId) {
+    const sid = sessionIdRef.current || sessionId;
+    if (sid) {
       try {
-        await fetch(`/calls/${sessionId}/context`, {
+        await fetch(`/calls/${sid}/context`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ transaction_context: newCtx })
@@ -337,26 +341,57 @@ export default function App() {
   };
 
   // End Call & Fetch Post-Call Forensic Summary
-  const handleEndCall = async () => {
+  const handleEndCall = async (overrideSessionId = null) => {
     cleanupStreams();
+    const sid = overrideSessionId || sessionIdRef.current || sessionId;
 
-    if (sessionId) {
+    if (sid) {
       try {
-        const resp = await fetch(`/calls/${sessionId}/summary`);
+        const resp = await fetch(`/calls/${sid}/summary`);
         if (resp.ok) {
           const data = await resp.json();
           setSummaryData(data);
+          setViewState('summary');
+        } else {
+          console.error('Failed to load summary, server returned:', resp.status);
+          // Fallback summary so screen never goes blank
+          setSummaryData({
+            session_id: sid,
+            mode: callMode || 'mode_a_upload',
+            transaction_context: transactionContext,
+            created_at: Date.now() / 1000,
+            status: 'completed',
+            total_chunks: historyData.length,
+            peak_risk: historyData.length > 0 ? Math.max(...historyData.map(h => h.rolling_risk_score || 0)) : 0,
+            avg_risk: historyData.length > 0 ? (historyData.reduce((acc, h) => acc + (h.rolling_risk_score || 0), 0) / historyData.length) : 0,
+            alerts: []
+          });
+          setViewState('summary');
         }
       } catch (err) {
         console.error('Failed to load summary:', err);
+        setErrorMessage(`Failed to load summary: ${err.message}`);
+        setSummaryData({
+          session_id: sid,
+          mode: callMode || 'mode_a_upload',
+          transaction_context: transactionContext,
+          created_at: Date.now() / 1000,
+          status: 'completed',
+          total_chunks: historyData.length,
+          peak_risk: historyData.length > 0 ? Math.max(...historyData.map(h => h.rolling_risk_score || 0)) : 0,
+          avg_risk: historyData.length > 0 ? (historyData.reduce((acc, h) => acc + (h.rolling_risk_score || 0), 0) / historyData.length) : 0,
+          alerts: []
+        });
+        setViewState('summary');
       }
+    } else {
+      setViewState('summary');
     }
-
-    setViewState('summary');
   };
 
   const handleReset = () => {
     cleanupStreams();
+    sessionIdRef.current = null;
     setViewState('setup');
     setSessionId(null);
     setCallMode(null);

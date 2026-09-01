@@ -19,7 +19,10 @@ import scipy.signal
 import torch
 from typing import Dict, Any, Tuple
 
+from app.logger import get_logger, log_crash
 from app.models.aasist import AASIST_L, load_aasist_model, pad_to_aasist_length
+
+logger = get_logger("voice_defense.detector")
 
 
 class SyntheticVoiceDetector:
@@ -33,9 +36,13 @@ class SyntheticVoiceDetector:
         try:
             self.model, self.param_count, self.file_size = load_aasist_model(self.weights_path)
             self.is_ready = True
-            print(f" Loaded {self.model_name} ({self.param_count:,} trainable params, {self.file_size/1024:.1f} KB, strict=True)")
+            logger.info(
+                "Loaded %s (%d trainable params, %.1f KB, strict=True, device=%s)",
+                self.model_name, self.param_count, self.file_size / 1024, self.device
+            )
         except Exception as e:
-            print(f"Warning: Failed to load AASIST-L weights: {e}")
+            log_crash(e, context="Loading AASIST-L Neural Network Weights", extra_details={"weights_path": self.weights_path})
+            logger.error("Failed to load AASIST-L weights: %s", e)
             self.model = None
             self.is_ready = False
 
@@ -77,7 +84,12 @@ class SyntheticVoiceDetector:
                     bonafide_prob = float(probs[0, 1].item())
                     logits_raw = [float(logits[0, 0].item()), float(logits[0, 1].item())]
             except Exception as e:
-                print(f"AASIST-L inference error: {e}")
+                log_crash(
+                    e,
+                    context="AASIST-L Neural Inference Forward Pass",
+                    extra_details={"waveform_length": len(y), "sr": sr}
+                )
+                logger.error("AASIST-L inference error: %s", e)
                 spoof_prob = 0.5
                 bonafide_prob = 0.5
 

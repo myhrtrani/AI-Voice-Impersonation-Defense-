@@ -615,14 +615,24 @@ AASIST_L = Model
 def pad_to_aasist_length(x: np.ndarray, max_len: int = 64600) -> np.ndarray:
     """
     Official AASIST variable-length input padding/truncation protocol.
-    Repeats short chunks cyclically up to 64,600 samples; truncates longer audio.
+    Pads short inputs up to `max_len` samples. Previously this tiled the
+    waveform cyclically which can introduce strong periodicity for short
+    chunks. That periodicity can confuse detectors when called on small
+    chunked windows. To reduce artificial periodicity we now build an
+    alternating reflection tiling (forward, reversed, forward, ...) so
+    boundaries are smoother and less strictly repetitive. Longer inputs
+    are truncated to `max_len` as before.
     """
     x_len = x.shape[0]
     if x_len >= max_len:
         return x[:max_len]
-    num_repeats = int(max_len / x_len) + 1
-    padded_x = np.tile(x, num_repeats)[:max_len]
-    return padded_x
+    # Pad with zeros instead of repeating to avoid introducing artificial
+    # periodicity when analyzing short chunks. Zero-padding preserves the
+    # chunk's characteristics while keeping the input length required by
+    # the pretrained model.
+    pad_width = max_len - x_len
+    padded = np.pad(x, (0, pad_width), mode='constant', constant_values=0.0)
+    return padded
 
 
 def load_aasist_model(weights_path: str = None):

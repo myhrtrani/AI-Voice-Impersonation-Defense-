@@ -70,9 +70,16 @@ class Settings(BaseModel):
     VERSION: str = "1.0.0"
     API_PREFIX: str = "/calls"
     DB_PATH: str = "voice_detector.db"
+    LOG_DIR: str = "logs"
+    LOG_LEVEL: str = "INFO"
     ENABLE_NOISE_REDUCTION: bool = True
+    # Feature flag to enable calibrated logistic fusion (mean aggregation)
+    USE_CALIBRATED_SCORING: bool = False
+    # Path to persisted calibrator (joblib) used when USE_CALIBRATED_SCORING is True
+    CALIBRATOR_PATH: str = "models/calibrator.joblib"
     SCORING: ScoringConfig = ScoringConfig()
     AUDIO: AudioConfig = AudioConfig()
 
 
 settings = Settings()
+

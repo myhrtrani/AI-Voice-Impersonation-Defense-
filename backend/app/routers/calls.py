@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 
 from app.config import settings
+from app.logger import get_logger, log_crash
 from app.db import (
     create_session,
     update_session_context,
@@ -19,6 +20,7 @@ from app.db import (
 )
 
 router = APIRouter(prefix=settings.API_PREFIX, tags=["Calls"])
+logger = get_logger("voice_defense.calls")
 
 # Directory to temporarily store uploaded audio files for Mode A simulated replay
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "uploads")
@@ -51,10 +53,15 @@ async def upload_call_recording(
     save_filename = f"{session_id}{file_ext}"
     save_path = os.path.join(UPLOAD_DIR, save_filename)
 
+    logger.info("Upload request received: filename='%s', context='%s'", file.filename, transaction_context)
+
     try:
         with open(save_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+        file_size_kb = round(os.path.getsize(save_path) / 1024, 1)
+        logger.info("File saved successfully: path='%s' (%.1f KB)", save_path, file_size_kb)
     except Exception as e:
+        log_crash(e, context="Saving Uploaded Audio File", extra_details={"filename": file.filename, "save_path": save_path})
         raise HTTPException(status_code=500, detail=f"Failed to save audio file: {str(e)}")
 
     create_session(
@@ -62,6 +69,7 @@ async def upload_call_recording(
         mode="mode_a_upload",
         transaction_context=transaction_context
     )
+    logger.info("Mode A session created: session_id=%s, context=%s", session_id, transaction_context)
 
     return {
         "status": "success",
@@ -87,6 +95,8 @@ async def upload_preset_clip(
     if transaction_context not in valid_contexts:
         transaction_context = "general"
 
+    logger.info("Preset request received: preset='%s', context='%s'", preset_name, transaction_context)
+
     samples_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backend", "samples"))
     if not os.path.exists(samples_dir):
         samples_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "samples"))
@@ -96,17 +106,24 @@ async def upload_preset_clip(
         # Fallback search
         src_path = os.path.join(os.path.dirname(__file__), "..", "samples", preset_name)
         if not os.path.exists(src_path):
-            raise HTTPException(status_code=404, detail=f"Preset file '{preset_name}' not found")
+            err_msg = f"Preset file '{preset_name}' not found in {samples_dir}"
+            logger.error(err_msg)
+            raise HTTPException(status_code=404, detail=err_msg)
 
     session_id = f"session_a_{uuid.uuid4().hex[:8]}"
     dst_path = os.path.join(UPLOAD_DIR, f"{session_id}.wav")
-    shutil.copyfile(src_path, dst_path)
+    try:
+        shutil.copyfile(src_path, dst_path)
+    except Exception as e:
+        log_crash(e, context="Copying Preset Audio File", extra_details={"src": src_path, "dst": dst_path})
+        raise HTTPException(status_code=500, detail=f"Failed to copy preset file: {e}")
 
     create_session(
         session_id=session_id,
         mode="mode_a_upload",
         transaction_context=transaction_context
     )
+    logger.info("Preset session created: session_id=%s, preset='%s'", session_id, preset_name)
 
     return {
         "status": "success",
@@ -130,6 +147,7 @@ async def start_live_call(req: StartLiveRequest = StartLiveRequest()):
         mode="mode_b_live",
         transaction_context=req.transaction_context or "general"
     )
+    logger.info("Mode B live session initialized: session_id=%s, context=%s", session_id, req.transaction_context)
 
     return {
         "status": "success",
@@ -154,6 +172,7 @@ async def get_summary(session_id: str):
     """
     summary = get_session_summary(session_id)
     if not summary:
+        logger.warning("Summary requested for non-existent session: %s", session_id)
         raise HTTPException(status_code=404, detail="Session not found")
     return summary
 
@@ -174,12 +193,15 @@ async def update_context(session_id: str, req: UpdateContextRequest):
     """
     valid_contexts = ["general", "credential_reset", "otp_share", "fund_transfer"]
     if req.transaction_context not in valid_contexts:
+        logger.warning("Invalid context update attempted: '%s' for session %s", req.transaction_context, session_id)
         raise HTTPException(status_code=400, detail=f"Invalid context. Choose from {valid_contexts}")
 
     success = update_session_context(session_id, req.transaction_context)
     if not success:
+        logger.warning("Context update failed: session %s not found", session_id)
         raise HTTPException(status_code=404, detail="Session not found")
 
+    logger.info("Session %s context updated to: %s", session_id, req.transaction_context)
     return {
         "status": "success",
         "session_id": session_id,
