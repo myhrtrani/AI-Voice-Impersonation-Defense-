@@ -81,7 +81,8 @@ class RiskScoringEngine:
         self,
         rolling_risk_score: float,
         transaction_context: str = "general",
-        previous_severity: str = "NORMAL"
+        previous_severity: str = "NORMAL",
+        base_high_risk_min: Optional[float] = None
     ) -> Tuple[bool, str, str]:
         """
         Evaluates whether an alert should fire, ensuring no alert spam.
@@ -89,12 +90,16 @@ class RiskScoringEngine:
         Returns:
             Tuple of (should_fire_alert, current_severity, recommended_action)
         """
-        # Context-dependent sensitivity offset
-        offset = self.config.CONTEXT_THRESHOLD_OFFSETS.get(transaction_context, 0.0)
-        
+        # Context-dependent sensitivity offsets (CRITICAL and WARNING use separate offsets)
+        crit_offset = self.config.CONTEXT_THRESHOLD_OFFSETS.get(transaction_context, 0.0)
+        warn_offset = self.config.CONTEXT_WARNING_OFFSETS.get(transaction_context, 0.0)
+
+        # Allow optional override of the configured HIGH_RISK_MIN (used by Mode A Analysis page)
+        effective_high_min = base_high_risk_min if base_high_risk_min is not None else self.config.HIGH_RISK_MIN
+
         # Adjusted thresholds
-        crit_threshold = max(35.0, self.config.HIGH_RISK_MIN + offset)
-        warn_threshold = max(20.0, self.config.LOW_RISK_MAX + offset)
+        crit_threshold = max(35.0, effective_high_min + crit_offset)
+        warn_threshold = max(20.0, self.config.LOW_RISK_MAX + warn_offset)
 
         # Determine current severity
         if rolling_risk_score >= crit_threshold:

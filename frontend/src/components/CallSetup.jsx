@@ -29,28 +29,28 @@ export default function CallSetup({
     {
       id: 'general',
       name: 'General Call',
-      desc: 'Standard conversation. Standard alert threshold (>70%).',
+      desc: 'Standard conversation. CRITICAL threshold >60%.',
       icon: Lock,
       color: 'border-slate-700 hover:border-slate-500 bg-slate-900/60'
     },
     {
       id: 'credential_reset',
       name: 'Credential Reset',
-      desc: 'Password or PIN modification. Elevated sensitivity (>60%).',
+      desc: 'Password or PIN modification. CRITICAL threshold >60%.',
       icon: KeyRound,
       color: 'border-yellow-500/30 hover:border-yellow-500/60 bg-yellow-950/20'
     },
     {
       id: 'otp_share',
       name: 'OTP / 2FA Verification',
-      desc: 'Disclosing authentication codes. High sensitivity (>50%).',
+      desc: 'Disclosing authentication codes. CRITICAL threshold >60%.',
       icon: ShieldAlert,
       color: 'border-orange-500/30 hover:border-orange-500/60 bg-orange-950/20'
     },
     {
       id: 'fund_transfer',
       name: 'Fund Transfer / Wire',
-      desc: 'Financial payments and authorizations. Extreme sensitivity (>45%).',
+      desc: 'Financial payments and authorizations. CRITICAL threshold >60%.',
       icon: CreditCard,
       color: 'border-red-500/30 hover:border-red-500/60 bg-red-950/20'
     }

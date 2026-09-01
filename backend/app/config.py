@@ -11,7 +11,7 @@ class ScoringConfig(BaseModel):
     # Base risk thresholds (0 - 100)
     LOW_RISK_MAX: float = 40.0
     MEDIUM_RISK_MAX: float = 70.0
-    HIGH_RISK_MIN: float = 70.0
+    HIGH_RISK_MIN: float = 60.0
 
     # EWMA smoothing factor (alpha)
     # Higher alpha = more responsive to new chunk; Lower alpha = smoother
@@ -24,13 +24,21 @@ class ScoringConfig(BaseModel):
     WEIGHT_PITCH_JITTER: float = 0.15 # Pitch flatness and cycle jitter anomaly
     WEIGHT_SPECTRAL: float = 0.15    # Spectral flatness & centroid distribution
 
-    # Transaction context sensitivity offsets
-    # Reduces threshold for triggering warnings in sensitive financial / security transactions
+    # Transaction context sensitivity offsets (CRITICAL threshold only)
+    # All contexts use uniform 60.0% CRITICAL threshold (HIGH_RISK_MIN + offset)
     CONTEXT_THRESHOLD_OFFSETS: Dict[str, float] = {
-        "general": 0.0,            # Standard threshold (~70.0)
-        "credential_reset": -10.0, # Triggers warning at ~60.0
-        "otp_share": -20.0,        # Triggers warning at ~50.0
-        "fund_transfer": -25.0,    # Triggers warning at ~45.0
+        "general": 0.0,            # CRITICAL at 60.0%
+        "credential_reset": 0.0,   # CRITICAL at 60.0%
+        "otp_share": 0.0,          # CRITICAL at 60.0%
+        "fund_transfer": 0.0,      # CRITICAL at 60.0%
+    }
+
+    # WARNING threshold offsets (LOW_RISK_MAX + offset) — kept context-specific
+    CONTEXT_WARNING_OFFSETS: Dict[str, float] = {
+        "general": 0.0,            # WARNING at 40.0%
+        "credential_reset": -10.0, # WARNING at 30.0%
+        "otp_share": -20.0,        # WARNING at 20.0%
+        "fund_transfer": -25.0,    # WARNING at 20.0% (clamped by max(20.0, ...))
     }
 
     # Recommended action text mapped by severity & context

@@ -10,7 +10,7 @@ export default function App() {
   const [callMode, setCallMode] = useState(null); // 'mode_a_upload' or 'mode_b_live'
   const [sessionId, setSessionId] = useState(null);
   const [transactionContext, setTransactionContext] = useState('general');
-  const [thresholds, setThresholds] = useState({ low_max: 40, high_min: 70 });
+  const [thresholds, setThresholds] = useState({ low_max: 40, high_min: 60 });
   const [noiseReductionActive, setNoiseReductionActive] = useState(true);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState(null);
