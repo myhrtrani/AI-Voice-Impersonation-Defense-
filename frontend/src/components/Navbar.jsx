@@ -2,20 +2,6 @@ import React from 'react';
 import { ShieldCheck, ShieldAlert, Cpu, Activity, Info, Radio } from 'lucide-react';
 
 export default function Navbar({ transactionContext, noiseReductionActive, onOpenScalePanel }) {
-  const getContextBadge = (ctx) => {
-    switch (ctx) {
-      case 'fund_transfer':
-        return { label: 'FUND TRANSFER (MAX SENSITIVITY)', color: 'bg-red-500/20 text-red-400 border-red-500/40' };
-      case 'otp_share':
-        return { label: 'OTP / 2FA DISCLOSURE (HIGH)', color: 'bg-orange-500/20 text-orange-400 border-orange-500/40' };
-      case 'credential_reset':
-        return { label: 'CREDENTIAL RESET', color: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/40' };
-      default:
-        return { label: 'GENERAL CONVERSATION', color: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40' };
-    }
-  };
-
-  const badge = getContextBadge(transactionContext);
 
   return (
     <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur-md sticky top-0 z-40 px-4 lg:px-8 py-3.5">
@@ -40,12 +26,6 @@ export default function Navbar({ transactionContext, noiseReductionActive, onOpe
 
         {/* Center: Live Telemetry Badges */}
         <div className="flex items-center gap-2.5 flex-wrap justify-center">
-          {/* Active Context */}
-          <div className={`px-2.5 py-1 rounded-full text-xs font-mono font-semibold border ${badge.color} flex items-center gap-1.5`}>
-            <Activity className="w-3.5 h-3.5" />
-            <span>{badge.label}</span>
-          </div>
-
           {/* Noise Stripper Status */}
           <div className="px-2.5 py-1 rounded-full text-xs font-mono font-semibold bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 flex items-center gap-1.5">
             <span className="relative flex h-2 w-2">

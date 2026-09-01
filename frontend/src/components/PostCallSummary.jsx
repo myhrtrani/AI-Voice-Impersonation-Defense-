@@ -143,7 +143,6 @@ export default function PostCallSummary({ summaryData, historyData = [], onReset
                   <th className="py-2 px-3">Chunk #</th>
                   <th className="py-2 px-3">Severity</th>
                   <th className="py-2 px-3">Risk Score</th>
-                  <th className="py-2 px-3">Context</th>
                   <th className="py-2 px-3">Recommended Security Action</th>
                 </tr>
               </thead>
@@ -157,7 +156,6 @@ export default function PostCallSummary({ summaryData, historyData = [], onReset
                       </span>
                     </td>
                     <td className="py-2.5 px-3 font-bold text-white">{Math.round(al.risk_score)}%</td>
-                    <td className="py-2.5 px-3 text-cyan-300">{al.transaction_context}</td>
                     <td className="py-2.5 px-3 font-sans text-xs text-slate-200">{al.recommended_action}</td>
                   </tr>
                 ))}
