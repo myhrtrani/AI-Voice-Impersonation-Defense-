@@ -17,7 +17,7 @@ resolution so neural vocoder artifacts can be detected with high precision.
 import numpy as np
 from scipy.fftpack import dct
 import librosa
-from typing import Dict, Any, Tuple
+from typing import Dict, Tuple
 
 
 def create_linear_filterbank(

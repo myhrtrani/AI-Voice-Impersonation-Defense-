@@ -16,11 +16,7 @@ import {
   Cpu, 
   Activity, 
   PhoneOff, 
-  Radio, 
   Sliders, 
-  CheckCircle, 
-  Zap,
-  Volume2
 } from 'lucide-react';
 
 export default function LiveDashboard({
@@ -105,7 +101,7 @@ export default function LiveDashboard({
           <div>
             <div className="flex items-center gap-2">
               <span className="text-xs font-bold text-white uppercase tracking-wider">
-                Mode A Stream Replay
+                {mode === 'mode_b_live' ? 'Mode B Live WebRTC' : 'Mode A Stream Replay'}
               </span>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-cyan-400 border border-slate-700">
                 ID: {sessionId}

@@ -31,8 +31,7 @@ from app.dsp.lfcc import analyze_lfcc_high_freq_artifacts, compute_lfcc
 from app.dsp.preprocessor import strip_background_noise
 from app.models.detector import detector
 from app.scoring.engine import scoring_engine
-from app.scoring.calibrated import Calibrator, agg_mean
-import joblib
+from app.scoring.calibrated import Calibrator
 
 router = APIRouter(tags=["Stream"])
 logger = get_logger("voice_defense.stream")
@@ -119,11 +118,9 @@ def process_audio_chunk(
         )
 
         # 4. Model Inference (Acoustic & Neural Vocoder Classifier)
-        # Prefer providing the detector with a longer recent-context buffer
-        # when available so the pretrained AASIST model sees continuous
-        # real audio instead of a single short repeated chunk.
+        # Prefer recent context so the detector sees continuous speech.
         model_input = clean_audio if context_audio is None else context_audio
-        model_score, model_telemetry = detector.infer(model_input, sr=sr)
+        model_score, _ = detector.infer(model_input, sr=sr)
 
         # 5. Calibrated scoring (optional) -- compute window-level calibrated probability
         calibrated_prob = None
@@ -230,7 +227,10 @@ def process_audio_chunk(
             "elapsed_seconds": round(elapsed_seconds, 2),
             "actual_chunk_duration": round(actual_chunk_duration_sec, 2),
             "actual_chunk_samples": actual_chunk_samples,
-            "total_audio_duration": round(total_audio_duration_sec, 2),
+            "total_audio_duration": (
+                round(total_audio_duration_sec, 2)
+                if total_audio_duration_sec is not None else None
+            ),
             "is_padded": is_padded,
             "nominal_window_sec": round(chunk_index * settings.AUDIO.CHUNK_DURATION_SEC, 2),
             "chunk_risk_score": chunk_risk,
@@ -345,7 +345,7 @@ async def websocket_stream_endpoint(websocket: WebSocket, session_id: str):
                 ctx_start = max(0, end_sample - 64600)
                 context_buffer = y[ctx_start:end_sample]
 
-                payload = process_audio_chunk(
+                payload = await asyncio.to_thread(process_audio_chunk,
                     audio_data=audio_chunk,
                     sr=target_sr,
                     session_id=session_id,
@@ -422,7 +422,7 @@ async def websocket_stream_endpoint(websocket: WebSocket, session_id: str):
                                 if len(last) < chunk_samples:
                                     last = np.pad(last, (0, chunk_samples - len(last)), mode='constant')
                                 chunk_index += 1
-                                payload = process_audio_chunk(
+                                payload = await asyncio.to_thread(process_audio_chunk,
                                     audio_data=last,
                                     sr=target_sr,
                                     session_id=session_id,
@@ -495,7 +495,7 @@ async def websocket_stream_endpoint(websocket: WebSocket, session_id: str):
                     chunk_index += 1
                     elapsed = chunk_index * chunk_duration
 
-                    payload = process_audio_chunk(
+                    payload = await asyncio.to_thread(process_audio_chunk,
                         audio_data=window,
                         sr=target_sr,
                         session_id=session_id,

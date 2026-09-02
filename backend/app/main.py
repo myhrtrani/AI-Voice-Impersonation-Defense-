@@ -21,8 +21,9 @@ from app.logger import (
     ERROR_LOG_FILE,
     ANALYSIS_LOG_FILE
 )
-from app.db import init_db
-from app.routers import calls, stream, signaling
+from app.db import init_db, get_persisted_config
+from app.routers import calls, stream, signaling, analytics, settings as settings_router, localization
+from app.models.detector import detector
 
 # Initialize centralized logging immediately upon loading module
 setup_logging(settings.LOG_LEVEL)
@@ -42,6 +43,30 @@ async def lifespan(app: FastAPI):
     try:
         init_db()
         logger.info("Database initialized successfully at: %s", settings.DB_PATH)
+
+        # Load any persisted custom thresholds & configurations
+        saved_config = get_persisted_config()
+        if saved_config:
+            logger.info("Applying %d persisted settings from database...", len(saved_config))
+            if "low_risk_max" in saved_config:
+                settings.SCORING.LOW_RISK_MAX = float(saved_config["low_risk_max"])
+            if "high_risk_min" in saved_config:
+                settings.SCORING.HIGH_RISK_MIN = float(saved_config["high_risk_min"])
+                settings.SCORING.MEDIUM_RISK_MAX = float(saved_config["high_risk_min"])
+            if "ewma_alpha" in saved_config:
+                settings.SCORING.EWMA_ALPHA = float(saved_config["ewma_alpha"])
+            if "weight_model" in saved_config:
+                settings.SCORING.WEIGHT_MODEL = float(saved_config["weight_model"])
+            if "weight_lfcc" in saved_config:
+                settings.SCORING.WEIGHT_LFCC = float(saved_config["weight_lfcc"])
+            if "weight_pitch_jitter" in saved_config:
+                settings.SCORING.WEIGHT_PITCH_JITTER = float(saved_config["weight_pitch_jitter"])
+            if "weight_spectral" in saved_config:
+                settings.SCORING.WEIGHT_SPECTRAL = float(saved_config["weight_spectral"])
+            if "enable_noise_reduction" in saved_config:
+                settings.ENABLE_NOISE_REDUCTION = bool(saved_config["enable_noise_reduction"])
+            if "context_offsets" in saved_config and isinstance(saved_config["context_offsets"], dict):
+                settings.SCORING.CONTEXT_THRESHOLD_OFFSETS.update(saved_config["context_offsets"])
     except Exception as e:
         log_crash(e, context="Database Initialization on Startup")
         raise e
@@ -121,6 +146,10 @@ app.add_middleware(
 app.include_router(calls.router)
 app.include_router(stream.router)
 app.include_router(signaling.router)
+app.include_router(analytics.router)
+app.include_router(settings_router.router)
+app.include_router(localization.router)
+
 
 
 @app.get("/health", tags=["Health"])
@@ -147,6 +176,12 @@ async def health_check():
             "ewma_alpha": settings.SCORING.EWMA_ALPHA,
             "lfcc_weight": settings.SCORING.WEIGHT_LFCC,
             "model_weight": settings.SCORING.WEIGHT_MODEL
+        },
+        "model": {
+            "engine": detector.model_name,
+            "model_id": detector.model_id or None,
+            "ready": detector.is_ready,
+            "parameter_count": detector.param_count
         }
     }
 

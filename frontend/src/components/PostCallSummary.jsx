@@ -2,14 +2,8 @@ import React from 'react';
 import { 
   ShieldCheck, 
   ShieldAlert, 
-  AlertTriangle, 
-  Clock, 
   Activity, 
-  Layers, 
   RotateCcw, 
-  DownloadCloud,
-  FileCheck2,
-  Lock
 } from 'lucide-react';
 import { 
   ResponsiveContainer, 

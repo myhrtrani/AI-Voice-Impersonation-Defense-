@@ -1,11 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Navbar from './components/Navbar';
+import Sidebar from './components/Sidebar';
 import CallSetup from './components/CallSetup';
 import LiveDashboard from './components/LiveDashboard';
 import PostCallSummary from './components/PostCallSummary';
 import ProductionScalePanel from './components/ProductionScalePanel';
+import DashboardView from './components/DashboardView';
+import SettingsView from './components/SettingsView';
+import LanguageView from './components/LanguageView';
+import LogsView from './components/LogsView';
 
 export default function App() {
+  const [activePage, setActivePage] = useState('live_sentry'); // 'live_sentry', 'dashboard', 'settings', 'language', 'logs'
   const [viewState, setViewState] = useState('setup'); // 'setup', 'live', 'summary'
   const [callMode, setCallMode] = useState(null); // 'mode_a_upload' or 'mode_b_live'
   const [sessionId, setSessionId] = useState(null);
@@ -205,6 +211,9 @@ export default function App() {
       setLoading(false);
 
     } catch (err) {
+      cleanupStreams();
+      setViewState('setup');
+      setCallMode(null);
       setLoading(false);
       setErrorMessage(`Error starting Mode B: ${err.message}`);
     }
@@ -222,11 +231,12 @@ export default function App() {
     let source;
     let processor;
 
-    ws.onopen = () => {
+    ws.onopen = async () => {
       if (mode === 'mode_b_live' && stream) {
         // Use AudioContext to extract raw 16kHz PCM audio instead of MediaRecorder (WebM)
         // This ensures the backend can decode it natively via np.frombuffer without ffmpeg
         audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+        await audioContext.resume();
         source = audioContext.createMediaStreamSource(stream);
         processor = audioContext.createScriptProcessor(4096, 1, 1);
 
@@ -310,6 +320,7 @@ export default function App() {
 
     ws.onerror = (err) => {
       console.error('WebSocket Stream Error:', err);
+      setErrorMessage('Live audio analysis connection failed. Please restart the call.');
     };
 
     ws.onclose = () => {
@@ -402,31 +413,40 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100">
-      {/* Top Navigation */}
-      <Navbar
-        transactionContext={transactionContext}
-        noiseReductionActive={noiseReductionActive}
-        onOpenScalePanel={() => setIsScalePanelOpen(true)}
+    <div className="h-screen w-screen flex bg-slate-950 text-slate-100 overflow-hidden">
+      {/* Collapsible / Responsive Sidebar */}
+      <Sidebar
+        activePage={activePage}
+        onNavigate={setActivePage}
+        isLiveActive={viewState === 'live'}
+        liveMetrics={liveMetrics}
       />
 
-      {/* Global Error Banner */}
-      {errorMessage && (
-        <div className="max-w-7xl mx-auto w-full px-4 pt-4">
-          <div className="p-3.5 rounded-xl bg-red-950/80 border border-red-500/50 text-red-300 text-xs flex items-center justify-between">
-            <span>{errorMessage}</span>
-            <button
-              onClick={() => setErrorMessage(null)}
-              className="text-red-400 hover:text-white font-bold ml-4"
-            >
-              Dismiss
-            </button>
-          </div>
-        </div>
-      )}
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col h-full overflow-hidden">
+        {/* Top Navigation */}
+        <Navbar
+          activePage={activePage}
+          transactionContext={transactionContext}
+          noiseReductionActive={noiseReductionActive}
+          onOpenScalePanel={() => setIsScalePanelOpen(true)}
+        />
 
-      {/* Main Screen Content */}
-      <main className="flex-1 flex flex-col justify-center">
+        {/* Global Error Banner */}
+        {errorMessage && (
+          <div className="max-w-7xl mx-auto w-full px-4 pt-4 shrink-0">
+            <div className="p-3.5 rounded-xl bg-red-950/80 border border-red-500/50 text-red-300 text-xs flex items-center justify-between shadow-lg">
+              <span>{errorMessage}</span>
+              <button
+                onClick={() => setErrorMessage(null)}
+                className="text-red-400 hover:text-white font-bold ml-4"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Invisible audio element for playing remote stream in Mode B */}
         {remoteStream && (
           <audio
@@ -440,38 +460,50 @@ export default function App() {
           />
         )}
 
-        {viewState === 'setup' && (
-          <CallSetup
-            onStartModeA={handleStartModeA}
-            onStartModeB={handleStartModeB}
-            transactionContext={transactionContext}
-            setTransactionContext={setTransactionContext}
-            loading={loading}
-          />
-        )}
+        {/* Page Content Viewport */}
+        <main className="flex-1 overflow-y-auto flex flex-col justify-start">
+          {activePage === 'live_sentry' && (
+            <div className="flex-1 flex flex-col justify-center">
+              {viewState === 'setup' && (
+                <CallSetup
+                  onStartModeA={handleStartModeA}
+                  onStartModeB={handleStartModeB}
+                  transactionContext={transactionContext}
+                  setTransactionContext={setTransactionContext}
+                  loading={loading}
+                />
+              )}
 
-        {viewState === 'live' && (
-          <LiveDashboard
-            sessionId={sessionId}
-            mode={callMode}
-            transactionContext={transactionContext}
-            onChangeContext={handleChangeContext}
-            onEndCall={handleEndCall}
-            liveMetrics={liveMetrics}
-            historyData={historyData}
-            thresholds={thresholds}
-          />
-        )}
+              {viewState === 'live' && (
+                <LiveDashboard
+                  sessionId={sessionId}
+                  mode={callMode}
+                  transactionContext={transactionContext}
+                  onChangeContext={handleChangeContext}
+                  onEndCall={handleEndCall}
+                  liveMetrics={liveMetrics}
+                  historyData={historyData}
+                  thresholds={thresholds}
+                />
+              )}
 
-        {viewState === 'summary' && (
-          <PostCallSummary
-            summaryData={summaryData}
-            historyData={historyData}
-            onReset={handleReset}
-            thresholds={thresholds}
-          />
-        )}
-      </main>
+              {viewState === 'summary' && (
+                <PostCallSummary
+                  summaryData={summaryData}
+                  historyData={historyData}
+                  onReset={handleReset}
+                  thresholds={thresholds}
+                />
+              )}
+            </div>
+          )}
+
+          {activePage === 'dashboard' && <DashboardView />}
+          {activePage === 'settings' && <SettingsView />}
+          {activePage === 'language' && <LanguageView />}
+          {activePage === 'logs' && <LogsView />}
+        </main>
+      </div>
 
       {/* Production Scale Architecture Panel (Modal) */}
       <ProductionScalePanel
@@ -481,3 +513,4 @@ export default function App() {
     </div>
   );
 }
+

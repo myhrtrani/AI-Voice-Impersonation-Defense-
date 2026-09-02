@@ -3,12 +3,11 @@ REST Endpoints for Call Sessions, Upload (Mode A), Start-Live (Mode B), Summarie
 """
 
 import uuid
-import time
 import os
 import shutil
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
-from typing import Optional, Dict, Any, List
+from typing import Optional
 
 from app.config import settings
 from app.logger import get_logger, log_crash

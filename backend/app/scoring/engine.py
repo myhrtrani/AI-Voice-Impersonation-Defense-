@@ -24,7 +24,7 @@ Smoothing & Anti-Spam:
 - Alert state machine tracks previous severity level to prevent spamming notifications on every chunk.
 """
 
-from typing import Dict, Any, Optional, Tuple
+from typing import Optional, Tuple
 from app.config import settings
 
 

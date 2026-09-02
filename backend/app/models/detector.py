@@ -1,54 +1,57 @@
-"""
-Pretrained Synthetic Speech & Deepfake Audio Detector Module.
-Integrates Official NAVER Clova AASIST-L Pretrained Neural Model (85,306 parameters).
+"""WavLM-backed synthetic speech detector with a graceful local fallback."""
 
-Production Pipeline:
---------------------
-1. Model: Official AASIST-L (Audio Anti-Spoofing using Integrated Spectro-Temporal Graph Attention Networks)
-2. Pretrained Checkpoint: AASIST-L.pth (426,428 bytes, strict=True loaded)
-3. Input Handling: 16,000 Hz waveform repetition-padded to official length 64,600 samples
-4. Class Mapping: Index 0 = SPOOF (Synthetic), Index 1 = BONAFIDE (Authentic Human)
-5. Output: Model Confidence Score [0.0 - 100.0] representing P(Spoof)
-6. Supporting Telemetry: Acoustic features & raw logits for diagnostics.
-"""
-
-import os
 import time
 import numpy as np
 import scipy.signal
-import torch
 from typing import Dict, Any, Tuple
 
+from app.config import settings
 from app.logger import get_logger, log_crash
-from app.models.aasist import AASIST_L, load_aasist_model, pad_to_aasist_length
+
+try:
+    import torch
+    from transformers import AutoFeatureExtractor, AutoModelForAudioClassification
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+    torch = None
 
 logger = get_logger("voice_defense.detector")
 
 
 class SyntheticVoiceDetector:
     def __init__(self):
-        self.model_name = "NAVER Clova AASIST-L (Official Pretrained Checkpoint)"
-        self.weights_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "weights", "AASIST-L.pth"))
-        self.device = torch.device("cpu")
+        self.model_name = "WavLM fine-tuned audio classifier"
+        self.model_id = settings.WAVLM_MODEL_ID.strip()
+        self.device = torch.device("cpu") if TORCH_AVAILABLE and torch else None
         self.param_count = 0
-        self.file_size = 0
+        self.model = None
+        self.feature_extractor = None
+        self.is_ready = False
 
-        try:
-            self.model, self.param_count, self.file_size = load_aasist_model(self.weights_path)
-            self.is_ready = True
-            logger.info(
-                "Loaded %s (%d trainable params, %.1f KB, strict=True, device=%s)",
-                self.model_name, self.param_count, self.file_size / 1024, self.device
-            )
-        except Exception as e:
-            log_crash(e, context="Loading AASIST-L Neural Network Weights", extra_details={"weights_path": self.weights_path})
-            logger.error("Failed to load AASIST-L weights: %s", e)
-            self.model = None
-            self.is_ready = False
+        if TORCH_AVAILABLE and self.model_id:
+            try:
+                self.feature_extractor = AutoFeatureExtractor.from_pretrained(self.model_id)
+                self.model = AutoModelForAudioClassification.from_pretrained(self.model_id).to(self.device)
+                self.model.eval()
+                self.param_count = sum(p.numel() for p in self.model.parameters())
+                self.is_ready = True
+                logger.info(
+                    "Loaded %s from %s (%d params, device=%s)",
+                    self.model_name, self.model_id, self.param_count, self.device
+                )
+            except Exception as e:
+                log_crash(e, context="Loading WavLM Classifier", extra_details={"model_id": self.model_id})
+                logger.error("Failed to load WavLM classifier: %s", e)
+                self.model = None
+                self.is_ready = False
+        else:
+            logger.info("WavLM checkpoint not configured; using acoustic fallback for model score.")
+
 
     def infer(self, y: np.ndarray, sr: int = 16000) -> Tuple[float, Dict[str, Any]]:
         """
-        Runs official pretrained AASIST-L neural inference on an audio chunk.
+        Runs WavLM audio-classification inference on an audio chunk.
 
         Args:
             y: Audio waveform as 1D float32 numpy array.
@@ -66,30 +69,28 @@ class SyntheticVoiceDetector:
         bonafide_prob = 1.0
         logits_raw = [0.0, 0.0]
 
-        if self.model is not None and self.is_ready:
+        if self.model is not None and self.feature_extractor is not None and self.is_ready:
             try:
-                # 1. Official Input Preparation: repetition-padding to 64,600 samples
-                y_padded = pad_to_aasist_length(y, max_len=64600)
-                tensor_input = torch.from_numpy(y_padded.astype(np.float32)).unsqueeze(0).to(self.device)
-
-                # 2. Forward Pass through Official AASIST-L
-                with torch.no_grad():
-                    last_hidden, logits = self.model(tensor_input)
+                max_samples = int(settings.WAVLM_MAX_SECONDS * sr)
+                model_audio = y[-max_samples:] if len(y) > max_samples else y
+                inputs = self.feature_extractor(
+                    model_audio.astype(np.float32), sampling_rate=sr, return_tensors="pt"
+                )
+                inputs = {key: value.to(self.device) for key, value in inputs.items()}
+                with torch.inference_mode():
+                    logits = self.model(**inputs).logits
                     probs = torch.softmax(logits, dim=-1)
-
-                    # Official ASVspoof/AASIST Class Mapping:
-                    # Index 0 = SPOOF (Synthetic / AI Voice Clone)
-                    # Index 1 = BONAFIDE (Authentic Human Voice)
-                    spoof_prob = float(probs[0, 0].item())
-                    bonafide_prob = float(probs[0, 1].item())
-                    logits_raw = [float(logits[0, 0].item()), float(logits[0, 1].item())]
+                    spoof_index = min(settings.WAVLM_SPOOF_LABEL, probs.shape[-1] - 1)
+                    spoof_prob = float(probs[0, spoof_index].item())
+                    bonafide_prob = float(1.0 - spoof_prob)
+                    logits_raw = [float(value) for value in logits[0].detach().cpu().tolist()]
             except Exception as e:
                 log_crash(
                     e,
-                    context="AASIST-L Neural Inference Forward Pass",
+                    context="WavLM Neural Inference Forward Pass",
                     extra_details={"waveform_length": len(y), "sr": sr}
                 )
-                logger.error("AASIST-L inference error: %s", e)
+                logger.error("WavLM inference error: %s", e)
                 spoof_prob = 0.5
                 bonafide_prob = 0.5
 
@@ -109,6 +110,7 @@ class SyntheticVoiceDetector:
 
         telemetry = {
             "model_engine": self.model_name,
+            "model_id": self.model_id or None,
             "pretrained_loaded": (self.model is not None and self.is_ready),
             "model_score": model_score,
             "spoof_probability": round(spoof_prob, 4),

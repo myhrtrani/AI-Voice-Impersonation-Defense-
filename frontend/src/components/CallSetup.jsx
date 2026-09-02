@@ -9,9 +9,7 @@ import {
   FileAudio, 
   Play, 
   ArrowRight,
-  Radio,
-  Zap,
-  Users
+  Zap
 } from 'lucide-react';
 
 export default function CallSetup({ 

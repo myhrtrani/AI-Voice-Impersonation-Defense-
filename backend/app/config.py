@@ -3,8 +3,9 @@ Configuration and Threshold Settings for Voice Impersonation Risk Detector.
 All thresholds and weights are centralized here and configurable per environment.
 """
 
+import os
 from pydantic import BaseModel
-from typing import Dict, Any
+from typing import Dict
 
 
 class ScoringConfig(BaseModel):
@@ -77,6 +78,11 @@ class Settings(BaseModel):
     USE_CALIBRATED_SCORING: bool = False
     # Path to persisted calibrator (joblib) used when USE_CALIBRATED_SCORING is True
     CALIBRATOR_PATH: str = "models/calibrator.joblib"
+    # WavLM must point to a fine-tuned audio-classification checkpoint for
+    # meaningful spoof probabilities. Leave empty to use the acoustic fallback.
+    WAVLM_MODEL_ID: str = os.getenv("WAVLM_MODEL_ID", "")
+    WAVLM_SPOOF_LABEL: int = int(os.getenv("WAVLM_SPOOF_LABEL", "1"))
+    WAVLM_MAX_SECONDS: float = float(os.getenv("WAVLM_MAX_SECONDS", "4.0"))
     SCORING: ScoringConfig = ScoringConfig()
     AUDIO: AudioConfig = AudioConfig()
 

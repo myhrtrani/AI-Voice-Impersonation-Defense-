@@ -75,6 +75,15 @@ def init_db():
         )
         """)
         
+        # System Config Table
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS system_config (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at REAL NOT NULL
+        )
+        """)
+        
         conn.commit()
         conn.close()
     except Exception as e:
@@ -241,3 +250,237 @@ def get_session_history(session_id: str) -> List[Dict[str, Any]]:
     except Exception as e:
         log_crash(e, context=f"Get Session History ({session_id})")
         return []
+
+
+def get_all_sessions(
+    limit: int = 50,
+    offset: int = 0,
+    context_filter: Optional[str] = None,
+    risk_filter: Optional[str] = None,
+    search: Optional[str] = None
+) -> Dict[str, Any]:
+    """Retrieves paginated list of call sessions with associated alert counts."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        query = """
+        SELECT 
+            s.*,
+            (SELECT COUNT(*) FROM alerts a WHERE a.session_id = s.session_id) as alert_count,
+            (SELECT MAX(a.severity) FROM alerts a WHERE a.session_id = s.session_id) as highest_severity
+        FROM sessions s
+        WHERE 1=1
+        """
+        params = []
+
+        if context_filter and context_filter != "all":
+            query += " AND s.transaction_context = ?"
+            params.append(context_filter)
+
+        if risk_filter == "high":
+            query += f" AND s.peak_risk >= {settings.SCORING.HIGH_RISK_MIN}"
+        elif risk_filter == "medium":
+            query += f" AND s.peak_risk >= {settings.SCORING.LOW_RISK_MAX} AND s.peak_risk < {settings.SCORING.HIGH_RISK_MIN}"
+        elif risk_filter == "low":
+            query += f" AND s.peak_risk < {settings.SCORING.LOW_RISK_MAX}"
+
+        if search:
+            query += " AND (s.session_id LIKE ? OR s.transaction_context LIKE ?)"
+            params.extend([f"%{search}%", f"%{search}%"])
+
+        # Count total matching
+        count_query = f"SELECT COUNT(*) as total FROM ({query})"
+        cursor.execute(count_query, params)
+        total_count = cursor.fetchone()["total"]
+
+        query += " ORDER BY s.created_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        cursor.execute(query, params)
+        sessions = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+
+        return {
+            "total": total_count,
+            "limit": limit,
+            "offset": offset,
+            "sessions": sessions
+        }
+    except Exception as e:
+        log_crash(e, context="Get All Sessions")
+        return {"total": 0, "limit": limit, "offset": offset, "sessions": []}
+
+
+def delete_session(session_id: str) -> bool:
+    """Deletes a session and its associated metrics and alerts from the database."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM chunk_metrics WHERE session_id = ?", (session_id,))
+        cursor.execute("DELETE FROM alerts WHERE session_id = ?", (session_id,))
+        cursor.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        log_crash(e, context=f"Delete Session ({session_id})")
+        return False
+
+
+def get_analytics_summary() -> Dict[str, Any]:
+    """Computes comprehensive dashboard analytics and risk aggregates across all sessions."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Total Sessions & Overall Risk Stats
+        cursor.execute("""
+        SELECT 
+            COUNT(*) as total_sessions,
+            COALESCE(AVG(avg_risk), 0.0) as overall_avg_risk,
+            COALESCE(MAX(peak_risk), 0.0) as overall_peak_risk,
+            COALESCE(SUM(total_chunks), 0) as total_audio_chunks
+        FROM sessions
+        """)
+        base_stats = dict(cursor.fetchone())
+
+        # Total Alerts & High-Risk Interceptions
+        cursor.execute("""
+        SELECT 
+            COUNT(*) as total_alerts,
+            SUM(CASE WHEN severity = 'CRITICAL' THEN 1 ELSE 0 END) as critical_alerts,
+            SUM(CASE WHEN severity = 'WARNING' THEN 1 ELSE 0 END) as warning_alerts
+        FROM alerts
+        """)
+        alert_stats = dict(cursor.fetchone())
+
+        # Threat breakdown by Transaction Context
+        cursor.execute("""
+        SELECT 
+            s.transaction_context,
+            COUNT(DISTINCT s.session_id) as session_count,
+            COALESCE(AVG(s.peak_risk), 0.0) as avg_peak_risk,
+            COALESCE(AVG(s.avg_risk), 0.0) as avg_mean_risk,
+            COUNT(a.id) as alert_count,
+            SUM(CASE WHEN a.severity = 'CRITICAL' THEN 1 ELSE 0 END) as critical_count
+        FROM sessions s
+        LEFT JOIN alerts a ON s.session_id = a.session_id
+        GROUP BY s.transaction_context
+        """)
+        context_breakdown = [dict(row) for row in cursor.fetchall()]
+
+        # Mode Breakdown (Mode A Upload vs Mode B Live)
+        cursor.execute("""
+        SELECT mode, COUNT(*) as count, COALESCE(AVG(peak_risk), 0.0) as avg_peak_risk
+        FROM sessions
+        GROUP BY mode
+        """)
+        mode_breakdown = [dict(row) for row in cursor.fetchall()]
+
+        # Recent 10 Sessions timeline
+        cursor.execute("""
+        SELECT session_id, mode, transaction_context, created_at, peak_risk, avg_risk, total_chunks
+        FROM sessions
+        ORDER BY created_at DESC
+        LIMIT 10
+        """)
+        recent_sessions = [dict(row) for row in cursor.fetchall()]
+
+        # Hourly / Daily Activity aggregation (last 7 days or sessions)
+        cursor.execute("""
+        SELECT 
+            strftime('%Y-%m-%d', datetime(created_at, 'unixepoch')) as day,
+            COUNT(*) as calls_count,
+            COALESCE(AVG(peak_risk), 0.0) as avg_risk,
+            COALESCE(MAX(peak_risk), 0.0) as max_risk
+        FROM sessions
+        GROUP BY day
+        ORDER BY day ASC
+        LIMIT 14
+        """)
+        daily_trends = [dict(row) for row in cursor.fetchall()]
+
+        conn.close()
+
+        high_risk_threshold = settings.SCORING.HIGH_RISK_MIN
+        critical_count = alert_stats.get("critical_alerts") or 0
+        total_sessions = base_stats.get("total_sessions") or 0
+
+        threat_rate = round((critical_count / total_sessions * 100) if total_sessions > 0 else 0.0, 1)
+
+        return {
+            "total_sessions": total_sessions,
+            "overall_avg_risk": round(base_stats.get("overall_avg_risk") or 0.0, 1),
+            "overall_peak_risk": round(base_stats.get("overall_peak_risk") or 0.0, 1),
+            "total_audio_chunks": base_stats.get("total_audio_chunks") or 0,
+            "total_alerts": alert_stats.get("total_alerts") or 0,
+            "critical_alerts": critical_count,
+            "warning_alerts": alert_stats.get("warning_alerts") or 0,
+            "threat_interception_rate": threat_rate,
+            "context_breakdown": context_breakdown,
+            "mode_breakdown": mode_breakdown,
+            "recent_sessions": recent_sessions,
+            "daily_trends": daily_trends,
+            "high_risk_threshold": high_risk_threshold,
+            "low_risk_threshold": settings.SCORING.LOW_RISK_MAX
+        }
+    except Exception as e:
+        log_crash(e, context="Get Analytics Summary")
+        return {
+            "total_sessions": 0,
+            "overall_avg_risk": 0.0,
+            "overall_peak_risk": 0.0,
+            "total_audio_chunks": 0,
+            "total_alerts": 0,
+            "critical_alerts": 0,
+            "warning_alerts": 0,
+            "threat_interception_rate": 0.0,
+            "context_breakdown": [],
+            "mode_breakdown": [],
+            "recent_sessions": [],
+            "daily_trends": []
+        }
+
+
+def get_persisted_config() -> Dict[str, Any]:
+    """Loads custom saved configuration from system_config table."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT key, value FROM system_config")
+        rows = cursor.fetchall()
+        conn.close()
+        import json
+        config = {}
+        for row in rows:
+            try:
+                config[row["key"]] = json.loads(row["value"])
+            except Exception:
+                config[row["key"]] = row["value"]
+        return config
+    except Exception as e:
+        logger.warning("Could not load persisted config: %s", e)
+        return {}
+
+
+def save_persisted_config(config_dict: Dict[str, Any]) -> bool:
+    """Saves custom configuration key-value pairs into system_config table."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        now = time.time()
+        import json
+        for k, v in config_dict.items():
+            val_str = json.dumps(v)
+            cursor.execute(
+                "INSERT OR REPLACE INTO system_config (key, value, updated_at) VALUES (?, ?, ?)",
+                (k, val_str, now)
+            )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        log_crash(e, context="Save Persisted Config", extra_details=config_dict)
+        return False
+
