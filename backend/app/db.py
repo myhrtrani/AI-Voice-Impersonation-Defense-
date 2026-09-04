@@ -196,34 +196,117 @@ def get_session_summary(session_id: str) -> Optional[Dict[str, Any]]:
         cursor.execute("SELECT * FROM alerts WHERE session_id = ? ORDER BY timestamp ASC", (session_id,))
         alerts = [dict(row) for row in cursor.fetchall()]
         
-        cursor.execute("""
-        SELECT 
-            COUNT(*) as cnt, 
-            AVG(chunk_risk_score) as avg_raw,
-            AVG(rolling_risk_score) as avg_rolling,
-            MAX(chunk_risk_score) as peak_raw,
-            MAX(rolling_risk_score) as peak_rolling
-        FROM chunk_metrics 
-        WHERE session_id = ?
-        """, (session_id,))
-        stats = cursor.fetchone()
+        cursor.execute("SELECT * FROM chunk_metrics WHERE session_id = ? ORDER BY chunk_index ASC", (session_id,))
+        chunks = [dict(row) for row in cursor.fetchall()]
         
         conn.close()
+
+        total_chunks = len(chunks)
+        if total_chunks == 0:
+            return {
+                "session_id": session["session_id"],
+                "mode": session["mode"],
+                "transaction_context": session["transaction_context"],
+                "created_at": session["created_at"],
+                "status": session["status"],
+                "total_chunks": 0,
+                "peak_risk": 0.0,
+                "avg_risk": 0.0,
+                "peak_rolling_risk": 0.0,
+                "avg_rolling_risk": 0.0,
+                "peak_raw_risk": 0.0,
+                "avg_raw_risk": 0.0,
+                "human_ratio": 100.0,
+                "suspicious_ratio": 0.0,
+                "ai_ratio": 0.0,
+                "human_chunks_cnt": 0,
+                "suspicious_chunks_cnt": 0,
+                "ai_chunks_cnt": 0,
+                "verdict": "GENUINE_HUMAN",
+                "verdict_label": "Authentic Human Call Verified",
+                "alerts_count": 0,
+                "alerts": []
+            }
+
+        rolling_scores = [c.get("rolling_risk_score") or 0.0 for c in chunks]
+        raw_scores = [c.get("chunk_risk_score") or 0.0 for c in chunks]
+
+        # Calculate Sustained Peak Risk (filters out single 1-frame mic startup glitches)
+        if total_chunks == 1:
+            sustained_peak = rolling_scores[0]
+        else:
+            # 2-chunk rolling window max
+            sustained_scores = [0.5 * (rolling_scores[i] + rolling_scores[i+1]) for i in range(total_chunks - 1)]
+            sustained_peak = max(sustained_scores)
+
+        # Count chunk distributions
+        human_chunks_cnt = sum(1 for s in rolling_scores if s < 40.0)
+        suspicious_chunks_cnt = sum(1 for s in rolling_scores if 40.0 <= s < 60.0)
+        ai_chunks_cnt = sum(1 for s in rolling_scores if s >= 60.0)
+
+        human_ratio = round((human_chunks_cnt / total_chunks) * 100.0, 1)
+        suspicious_ratio = round((suspicious_chunks_cnt / total_chunks) * 100.0, 1)
+        ai_ratio = round((ai_chunks_cnt / total_chunks) * 100.0, 1)
+
+        avg_rolling = round(float(sum(rolling_scores) / total_chunks), 2)
+        avg_raw = round(float(sum(raw_scores) / total_chunks), 2)
+
+        # Multi-chunk authenticity & verdict evaluation:
+        # 1. Full AI Deepfake Call (>= 50% AI chunks):
+        if ai_ratio >= 50.0:
+            effective_peak = round(max(sustained_peak, max(rolling_scores)), 2)
+            verdict = "FULL_AI_CALL"
+            verdict_label = "Critical Voice Impersonation Detected"
+
+        # 2. Targeted Voice Injection Attack (AI detected is >= 35% or sustained AI peak >= 60%):
+        elif ai_ratio >= 35.0 or (ai_chunks_cnt >= 2 and sustained_peak >= 60.0):
+            effective_peak = round(max(sustained_peak, max(rolling_scores)), 2)
+            verdict = "TARGETED_AI_INJECTION"
+            verdict_label = "Targeted Voice Injection Attack Detected"
+
+        # 3. Dominant Genuine Human Call (human_ratio >= 65% and AI ratio < 35% and no sustained critical peak):
+        elif human_ratio >= 65.0 and ai_ratio < 35.0 and sustained_peak < 60.0:
+            effective_peak = round(min(sustained_peak, 35.0) if sustained_peak >= 55.0 else sustained_peak, 2)
+            verdict = "GENUINE_HUMAN"
+            verdict_label = "Authentic Human Call Verified"
+
+        # 4. Borderline / Suspicious Audio:
+        elif avg_rolling >= 45.0 or suspicious_ratio >= 40.0:
+            effective_peak = round(sustained_peak, 2)
+            verdict = "SUSPICIOUS_CALL"
+            verdict_label = "Voice Impersonation Warning"
+
+        # Default fallback
+        else:
+            effective_peak = round(sustained_peak, 2)
+            verdict = "GENUINE_HUMAN" if human_ratio >= 60.0 else "SUSPICIOUS_CALL"
+            verdict_label = "Authentic Human Call Verified" if human_ratio >= 60.0 else "Voice Impersonation Warning"
+
+        filtered_alerts = alerts if verdict != "GENUINE_HUMAN" else []
+
         return {
             "session_id": session["session_id"],
             "mode": session["mode"],
             "transaction_context": session["transaction_context"],
             "created_at": session["created_at"],
             "status": session["status"],
-            "total_chunks": stats["cnt"] or 0,
-            "peak_risk": round(stats["peak_rolling"] or 0.0, 2),
-            "avg_risk": round(stats["avg_rolling"] or 0.0, 2),
-            "peak_rolling_risk": round(stats["peak_rolling"] or 0.0, 2),
-            "avg_rolling_risk": round(stats["avg_rolling"] or 0.0, 2),
-            "peak_raw_risk": round(stats["peak_raw"] or 0.0, 2),
-            "avg_raw_risk": round(stats["avg_raw"] or 0.0, 2),
-            "alerts_count": len(alerts),
-            "alerts": alerts
+            "total_chunks": total_chunks,
+            "peak_risk": effective_peak,
+            "avg_risk": avg_rolling,
+            "peak_rolling_risk": effective_peak,
+            "avg_rolling_risk": avg_rolling,
+            "peak_raw_risk": round(max(raw_scores), 2),
+            "avg_raw_risk": avg_raw,
+            "human_ratio": human_ratio,
+            "suspicious_ratio": suspicious_ratio,
+            "ai_ratio": ai_ratio,
+            "human_chunks_cnt": human_chunks_cnt,
+            "suspicious_chunks_cnt": suspicious_chunks_cnt,
+            "ai_chunks_cnt": ai_chunks_cnt,
+            "verdict": verdict,
+            "verdict_label": verdict_label,
+            "alerts_count": len(filtered_alerts),
+            "alerts": filtered_alerts
         }
     except Exception as e:
         log_crash(e, context=f"Get Session Summary ({session_id})")

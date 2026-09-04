@@ -32,11 +32,14 @@ export default function PostCallSummary({ summaryData, historyData = [], onReset
   const highMin = thresholds?.high_min || 60;
   const lowMax = thresholds?.low_max || 40;
 
-  // Final verdict uses the same CRITICAL threshold as the scoring engine.
-// CRITICAL: peak risk reaches the configured critical threshold (60%).
-// WARNING: peak risk reaches the configured warning threshold (55%) but stays below CRITICAL.
-const isHighRisk = peakRisk >= highMin;
-const isMediumRisk = peakRisk >= 55 && !isHighRisk;
+  const humanRatio = summaryData?.human_ratio ?? 100;
+  const aiRatio = summaryData?.ai_ratio ?? 0;
+
+  // Final verdict uses the backend multi-chunk classification and thresholds.
+  const isGenuineHuman = summaryData?.verdict === 'GENUINE_HUMAN' || (humanRatio >= 65.0 && aiRatio < 35.0 && peakRisk < highMin);
+  const isHighRisk = !isGenuineHuman && (summaryData?.verdict === 'FULL_AI_CALL' || summaryData?.verdict === 'TARGETED_AI_INJECTION' || peakRisk >= highMin || aiRatio >= 35.0);
+  const isMediumRisk = !isGenuineHuman && !isHighRisk && (summaryData?.verdict === 'SUSPICIOUS_CALL' || peakRisk >= 55 || humanRatio < 60.0);
+  const verdictTitle = summaryData?.verdict_label || (isGenuineHuman ? 'Authentic Human Call Verified' : isHighRisk ? 'Critical Voice Impersonation Detected' : 'Voice Impersonation Warning');
 
   const chartData = historyData.map((d) => ({
     time: `${d.elapsed_seconds || (d.chunk_index * 2.5)}s`,
@@ -67,12 +70,12 @@ const isMediumRisk = peakRisk >= 55 && !isHighRisk;
 
             <div>
               <h2 className="text-xl font-bold text-white">
-                {isHighRisk
-                  ? 'Critical Voice Impersonation Detected'
-                  : isMediumRisk
-                    ? 'Voice Impersonation Warning'
-                    : 'Authentic Human Call Verified'}
+                {verdictTitle}
               </h2>
+              <p className="text-xs text-slate-400 font-mono mt-0.5">
+                Authenticity: <span className="text-emerald-400 font-semibold">{humanRatio}% Human</span>
+                {aiRatio > 0 && <span className="text-red-400 font-semibold ml-2">• {aiRatio}% AI Detected</span>}
+              </p>
             </div>
           </div>
 <button
@@ -87,7 +90,7 @@ const isMediumRisk = peakRisk >= 55 && !isHighRisk;
         {/* Aggregate KPI Grid */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800">
-            <span className="text-[11px] font-mono text-slate-400">Peak Risk Index</span>
+            <span className="text-[11px] font-mono text-slate-400">Peak Sustained Risk</span>
             <div className={`text-2xl font-black font-mono mt-1 ${isHighRisk ? 'text-red-400' : 'text-emerald-400'}`}>
               {Math.round(peakRisk)}%
             </div>

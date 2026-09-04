@@ -140,13 +140,14 @@ def extract_spectral_features(
         mean_centroid = float(np.mean(centroid))
         
         # Spectral anomaly scoring (0 - 100)
-        # Clean human voice has sharp harmonic resonances (< 0.015). Synthetic vocoders exhibit elevated noise floor (> 0.025)
-        flatness_anomaly = np.clip((mean_flatness - 0.015) / 0.035, 0.0, 1.0)
+        # Natural human female/male voices with fricatives have speech-band flatness between 0.005 and 0.080. Vocoder hiss > 0.12
+        flatness_anomaly = np.clip((mean_flatness - 0.080) / 0.150, 0.0, 1.0)
         
-        if mean_centroid > 3200:
-            centroid_anomaly = np.clip((mean_centroid - 3200) / 1500, 0.0, 1.0)
-        elif mean_centroid < 800 and mean_centroid > 0:
-            centroid_anomaly = np.clip((800 - mean_centroid) / 500, 0.0, 1.0)
+        # Female vocal tract has higher natural centroid (up to 3600 Hz)
+        if mean_centroid > 3800:
+            centroid_anomaly = np.clip((mean_centroid - 3800) / 1500, 0.0, 1.0)
+        elif mean_centroid < 600 and mean_centroid > 0:
+            centroid_anomaly = np.clip((600 - mean_centroid) / 400, 0.0, 1.0)
         else:
             centroid_anomaly = 0.0
             

@@ -66,26 +66,26 @@ class RiskScoringEngine:
 
         # 1. Neural Voice Clone Path (ElevenLabs / Neural Vocoders):
         # Neural clones exhibit BOTH neural model detection AND verified high-frequency vocoder phase artifacts.
-        # Pure mic initialization clicks without vocoder artifacts (lfcc < 30) do NOT trigger this path.
         if (model_score >= 70.0 and lfcc_artifact_score >= 40.0) or (model_score >= 85.0 and lfcc_artifact_score >= 30.0):
             score = max(base_score, 0.35 * base_score + 0.65 * ai_vocoder_indicator)
             if score >= 55.0:
                 score = 62.0 + (score - 55.0) * 0.85
 
         # 2. Robotic / Replay / Monotone Synthesis Path:
-        # High pitch flatness / zero jitter anomaly combined with vocoder/spectral artifacts.
-        elif physics_anomaly >= 70.0 and (lfcc_artifact_score >= 25.0 or spectral_anomaly_score >= 35.0):
+        # Strictly requires high pitch flatness / zero jitter anomaly (pitch_anomaly >= 70.0)
+        # Combined with vocoder or spectral anomalies. Real human speakers have active intonation.
+        elif pitch_anomaly_score >= 70.0 and (lfcc_artifact_score >= 25.0 or spectral_anomaly_score >= 35.0):
             score = max(base_score, 0.40 * base_score + 0.60 * physics_anomaly)
             if score >= 55.0:
                 score = 62.0 + (score - 55.0) * 0.85
 
-        # 3. Clean Natural Human Voice Path:
-        # Active natural pitch intonation (pitch_anomaly <= 5.0) and moderate/low vocoder artifacts.
-        elif pitch_anomaly_score <= 5.0 and lfcc_artifact_score <= 35.0 and base_score <= 50.0:
-            score = base_score * 0.55
+        # 3. Clean Natural Human Voice Path (Male and Female speakers):
+        # Natural pitch intonation present (pitch_anomaly <= 15.0) and not meeting strict neural clone criteria.
+        elif pitch_anomaly_score <= 15.0 and lfcc_artifact_score <= 60.0:
+            score = base_score * 0.45
 
         else:
-            score = base_score
+            score = base_score * 0.75
 
         return round(float(max(0.0, min(100.0, score))), 2)
 
