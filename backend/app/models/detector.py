@@ -315,11 +315,11 @@ class SyntheticVoiceDetector:
         ):
 
             fused_model_score = (
-                0.35 * model_score
-                + 0.65 * rf_score
+                0.30 * model_score
+                + 0.70 * rf_score
             )
-            # When both models or AASIST neural detector detect a voice clone (e.g. ElevenLabs), preserve high confidence
-            if model_score >= 70.0 and rf_score >= 35.0:
+            # When both models agree on high AI confidence (e.g. ElevenLabs where RF is also > 50%), preserve high confidence
+            if model_score >= 75.0 and rf_score >= 50.0:
                 fused_model_score = max(fused_model_score, 0.50 * model_score + 0.50 * rf_score)
 
         else:

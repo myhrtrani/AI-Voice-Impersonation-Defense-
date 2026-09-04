@@ -65,9 +65,10 @@ class RiskScoringEngine:
         physics_anomaly = max(pitch_anomaly_score, spectral_anomaly_score)
 
         # 1. Neural Voice Clone Path (ElevenLabs / Neural Vocoders):
-        # Neural clones synthesize human-like pitch, but have clear neural vocoder & high-frequency LFCC artifacts.
-        if model_score >= 60.0 or (ai_vocoder_indicator >= 65.0 and lfcc_artifact_score >= 35.0):
-            score = max(base_score, 0.40 * base_score + 0.60 * ai_vocoder_indicator)
+        # Neural clones exhibit BOTH neural model detection AND verified high-frequency vocoder phase artifacts.
+        # Pure mic initialization clicks without vocoder artifacts (lfcc < 30) do NOT trigger this path.
+        if (model_score >= 70.0 and lfcc_artifact_score >= 40.0) or (model_score >= 85.0 and lfcc_artifact_score >= 30.0):
+            score = max(base_score, 0.35 * base_score + 0.65 * ai_vocoder_indicator)
             if score >= 55.0:
                 score = 62.0 + (score - 55.0) * 0.85
 
@@ -79,9 +80,9 @@ class RiskScoringEngine:
                 score = 62.0 + (score - 55.0) * 0.85
 
         # 3. Clean Natural Human Voice Path:
-        # All anomaly signals are near zero.
-        elif base_score <= 35.0 and lfcc_artifact_score <= 10.0 and physics_anomaly <= 15.0:
-            score = base_score * 0.70
+        # Active natural pitch intonation (pitch_anomaly <= 5.0) and moderate/low vocoder artifacts.
+        elif pitch_anomaly_score <= 5.0 and lfcc_artifact_score <= 35.0 and base_score <= 50.0:
+            score = base_score * 0.55
 
         else:
             score = base_score

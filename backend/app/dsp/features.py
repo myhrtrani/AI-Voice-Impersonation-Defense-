@@ -70,18 +70,21 @@ def extract_pitch_and_jitter(
             jitter = 0.0
             
         # Calibrated Pitch & Jitter Anomaly Score (0.0 to 100.0)
-        # 1. Robotic Pitch Flatness: Natural conversational speech has std > 6 Hz. Monotone/flat synthetic speech < 3.0 Hz.
-        flatness_anomaly = np.clip((6.0 - pitch_std) / 5.0, 0.0, 1.0)
+        # 1. Robotic Pitch Flatness: Natural conversational speech has std > 6 Hz. Monotone/flat synthetic speech < 2.5 Hz.
+        flatness_anomaly = np.clip((5.0 - pitch_std) / 4.0, 0.0, 1.0)
         
-        # 2. Hyper-smooth Jitter (< 0.010%) or Extreme Jitter (> 4.0%)
-        if jitter < 0.010:
+        # 2. Hyper-smooth Jitter (< 0.010%): AI neural models produce mathematical zero jitter (< 0.010%).
+        # Note: High jitter (>3%) is natural in human microphone speech and is NOT an AI indicator.
+        if jitter < 0.010 and pitch_std < 5.0:
             jitter_anomaly = np.clip((0.010 - jitter) / 0.010, 0.0, 1.0)
-        elif jitter > 4.0:
-            jitter_anomaly = np.clip((jitter - 4.0) / 3.0, 0.0, 1.0)
         else:
             jitter_anomaly = 0.0
             
-        pitch_anomaly_score = float(np.clip((0.6 * flatness_anomaly + 0.4 * jitter_anomaly) * 100.0, 0.0, 100.0))
+        # If natural human intonation is active (pitch_std >= 6.0), pitch anomaly is strictly 0.0
+        if pitch_std >= 6.0:
+            pitch_anomaly_score = 0.0
+        else:
+            pitch_anomaly_score = float(np.clip((0.6 * flatness_anomaly + 0.4 * jitter_anomaly) * 100.0, 0.0, 100.0))
         
         return {
             "pitch_mean": round(pitch_mean, 2),

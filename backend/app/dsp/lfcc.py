@@ -110,31 +110,52 @@ def analyze_lfcc_high_freq_artifacts(
         
     n_lfcc, n_frames = lfcc.shape
     
+    # Energy-gated active speech frame selection
+    total_power = np.exp(log_fb_energies)
+    frame_energy = np.sum(total_power, axis=0)
+    energy_thresh = max(1e-5, np.max(frame_energy) * 0.05)
+    active_frames = np.where(frame_energy >= energy_thresh)[0]
+    
+    if len(active_frames) < 3:
+        # Near-silent or ambient noise chunk
+        return {
+            "lfcc_artifact_score": 0.0,
+            "high_band_ratio": 0.0,
+            "upper_cepstral_var": 0.0,
+            "lfcc_delta_smoothness": 0.0
+        }
+        
+    active_log_fb = log_fb_energies[:, active_frames]
+    active_lfcc = lfcc[:, active_frames]
+    
     # 1. Upper linear band energy ratio (upper 40% of linear filters, ~4.8kHz to 8kHz)
     high_band_start = int(n_filters * 0.60)
-    high_band_power = np.exp(log_fb_energies[high_band_start:, :])
-    total_power = np.exp(log_fb_energies)
-    high_band_ratio = float(np.mean(np.sum(high_band_power, axis=0) / (np.sum(total_power, axis=0) + 1e-8)))
+    high_band_power = np.exp(active_log_fb[high_band_start:, :])
+    active_total_power = np.exp(active_log_fb)
+    high_band_ratio = float(np.mean(np.sum(high_band_power, axis=0) / (np.sum(active_total_power, axis=0) + 1e-8)))
     
     # 2. Upper cepstral coefficient variance (indices 10 to n_lfcc-1)
-    upper_coeffs = lfcc[min(10, n_lfcc - 1):, :]
+    upper_coeffs = active_lfcc[min(10, n_lfcc - 1):, :]
     upper_var = float(np.mean(np.var(upper_coeffs, axis=1)))
     
     # 3. Dynamic delta smoothness (Human speech intonation produces high delta variance > 3.0;
-    #    Robotic flat synthesis produces unnaturally uniform delta variance < 2.0)
-    lfcc_deltas = np.diff(lfcc, axis=1)
-    delta_variance = float(np.mean(np.var(lfcc_deltas, axis=1)))
+    #    Robotic flat synthesis produces unnaturally uniform delta variance < 1.8)
+    if active_lfcc.shape[1] > 2:
+        lfcc_deltas = np.diff(active_lfcc, axis=1)
+        delta_variance = float(np.mean(np.var(lfcc_deltas, axis=1)))
+    else:
+        delta_variance = 3.0
     
     # 4. Calibration:
-    # High-band anomaly (natural voice has < 0.01 energy above 4.8kHz; vocoders elevate upper energy)
-    high_band_anomaly = np.clip((high_band_ratio - 0.010) / 0.035, 0.0, 1.0)
+    # High-band anomaly (natural voice in mic audio has < 0.045 energy above 4.8kHz; vocoders elevate upper energy > 0.06)
+    high_band_anomaly = np.clip((high_band_ratio - 0.040) / 0.070, 0.0, 1.0)
     
     # Upper cepstral anomaly (vocoder harmonic ripple)
-    cepstral_anomaly = np.clip(upper_var / 0.60, 0.0, 1.0)
+    cepstral_anomaly = np.clip((upper_var - 0.30) / 0.80, 0.0, 1.0)
     
     # Dynamic smoothness anomaly (low delta movement in synthetic voice)
-    if delta_variance < 2.5:
-        dyn_anomaly = np.clip((2.5 - delta_variance) / 2.0, 0.0, 1.0)
+    if delta_variance < 1.8:
+        dyn_anomaly = np.clip((1.8 - delta_variance) / 1.5, 0.0, 1.0)
     else:
         dyn_anomaly = 0.0
         
