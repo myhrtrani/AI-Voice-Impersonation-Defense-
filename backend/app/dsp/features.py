@@ -70,14 +70,14 @@ def extract_pitch_and_jitter(
             jitter = 0.0
             
         # Calibrated Pitch & Jitter Anomaly Score (0.0 to 100.0)
-        # 1. Robotic Pitch Flatness: Human conversational speech has std > 12 Hz. Flat synthetic speech < 5 Hz.
-        flatness_anomaly = np.clip((12.0 - pitch_std) / 10.0, 0.0, 1.0)
+        # 1. Robotic Pitch Flatness: Natural conversational speech has std > 6 Hz. Monotone/flat synthetic speech < 3.0 Hz.
+        flatness_anomaly = np.clip((6.0 - pitch_std) / 5.0, 0.0, 1.0)
         
-        # 2. Hyper-smooth Jitter (< 0.20%) or Extreme Jitter (> 3.5%)
-        if jitter < 0.25:
-            jitter_anomaly = np.clip((0.25 - jitter) / 0.25, 0.0, 1.0)
-        elif jitter > 3.0:
-            jitter_anomaly = np.clip((jitter - 3.0) / 3.0, 0.0, 1.0)
+        # 2. Hyper-smooth Jitter (< 0.010%) or Extreme Jitter (> 4.0%)
+        if jitter < 0.010:
+            jitter_anomaly = np.clip((0.010 - jitter) / 0.010, 0.0, 1.0)
+        elif jitter > 4.0:
+            jitter_anomaly = np.clip((jitter - 4.0) / 3.0, 0.0, 1.0)
         else:
             jitter_anomaly = 0.0
             
@@ -106,8 +106,8 @@ def extract_spectral_features(
     - Spectral Flatness (Wiener entropy) = Geometric Mean / Arithmetic Mean of power spectrum.
     - Evaluated across the primary speech band (0 to 4000 Hz) to avoid unvoiced high-frequency
       noise floor inflation.
-    - Pure harmonic speech (vowels) concentrates energy in sharp peaks (Flatness ~ 0.01 - 0.15).
-    - Vocoder noise / unvoiced hiss / metallic artifacts exhibit elevated flatness (> 0.25).
+    - Pure harmonic speech (vowels) concentrates energy in sharp peaks (Flatness ~ 0.00 - 0.015).
+    - Vocoder noise / unvoiced hiss / metallic artifacts exhibit elevated flatness (> 0.025).
     """
     if len(y) < n_fft:
         return {"spectral_flatness": 0.0, "spectral_centroid": 0.0, "spectral_anomaly_score": 0.0}
@@ -137,7 +137,8 @@ def extract_spectral_features(
         mean_centroid = float(np.mean(centroid))
         
         # Spectral anomaly scoring (0 - 100)
-        flatness_anomaly = np.clip((mean_flatness - 0.12) / 0.25, 0.0, 1.0)
+        # Clean human voice has sharp harmonic resonances (< 0.015). Synthetic vocoders exhibit elevated noise floor (> 0.025)
+        flatness_anomaly = np.clip((mean_flatness - 0.015) / 0.035, 0.0, 1.0)
         
         if mean_centroid > 3200:
             centroid_anomaly = np.clip((mean_centroid - 3200) / 1500, 0.0, 1.0)
@@ -146,7 +147,7 @@ def extract_spectral_features(
         else:
             centroid_anomaly = 0.0
             
-        spectral_anomaly_score = float(np.clip((0.6 * flatness_anomaly + 0.4 * centroid_anomaly) * 100.0, 0.0, 100.0))
+        spectral_anomaly_score = float(np.clip(max(flatness_anomaly, 0.6 * flatness_anomaly + 0.4 * centroid_anomaly) * 100.0, 0.0, 100.0))
         
         return {
             "spectral_flatness": round(mean_flatness, 5),

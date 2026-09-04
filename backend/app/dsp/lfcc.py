@@ -126,15 +126,15 @@ def analyze_lfcc_high_freq_artifacts(
     delta_variance = float(np.mean(np.var(lfcc_deltas, axis=1)))
     
     # 4. Calibration:
-    # High-band anomaly (natural voice has < 0.015 energy above 4.8kHz; vocoders elevate upper energy)
-    high_band_anomaly = np.clip((high_band_ratio - 0.015) / 0.06, 0.0, 1.0)
+    # High-band anomaly (natural voice has < 0.01 energy above 4.8kHz; vocoders elevate upper energy)
+    high_band_anomaly = np.clip((high_band_ratio - 0.010) / 0.035, 0.0, 1.0)
     
-    # Upper cepstral anomaly
-    cepstral_anomaly = np.clip(upper_var / 0.8, 0.0, 1.0)
+    # Upper cepstral anomaly (vocoder harmonic ripple)
+    cepstral_anomaly = np.clip(upper_var / 0.60, 0.0, 1.0)
     
     # Dynamic smoothness anomaly (low delta movement in synthetic voice)
-    if delta_variance < 3.0:
-        dyn_anomaly = np.clip((3.0 - delta_variance) / 2.5, 0.0, 1.0)
+    if delta_variance < 2.5:
+        dyn_anomaly = np.clip((2.5 - delta_variance) / 2.0, 0.0, 1.0)
     else:
         dyn_anomaly = 0.0
         

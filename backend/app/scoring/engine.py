@@ -51,15 +51,41 @@ class RiskScoringEngine:
         # Hand-crafted adaptive shifting of weights was removed to ensure
         # scoring behavior is driven by validation/learned calibration rather
         # than a hard-coded rule.
-        w_model_eff = w_model
-        w_lfcc_eff = w_lfcc
-
-        score = (
-            w_model_eff * model_score +
-            w_lfcc_eff * lfcc_artifact_score +
+        base_score = (
+            w_model * model_score +
+            w_lfcc * lfcc_artifact_score +
             w_pitch * pitch_anomaly_score +
             w_spec * spectral_anomaly_score
         )
+
+        # Primary neural & vocoder deepfake indicators (e.g. ElevenLabs AI Voice clones)
+        ai_vocoder_indicator = max(model_score, lfcc_artifact_score)
+
+        # Acoustic physics anomalies (e.g. robotic flat pitch or zero-jitter synthesis)
+        physics_anomaly = max(pitch_anomaly_score, spectral_anomaly_score)
+
+        # 1. Neural Voice Clone Path (ElevenLabs / Neural Vocoders):
+        # Neural clones synthesize human-like pitch, but have clear neural vocoder & high-frequency LFCC artifacts.
+        if model_score >= 60.0 or (ai_vocoder_indicator >= 65.0 and lfcc_artifact_score >= 35.0):
+            score = max(base_score, 0.40 * base_score + 0.60 * ai_vocoder_indicator)
+            if score >= 55.0:
+                score = 62.0 + (score - 55.0) * 0.85
+
+        # 2. Robotic / Replay / Monotone Synthesis Path:
+        # High pitch flatness / zero jitter anomaly combined with vocoder/spectral artifacts.
+        elif physics_anomaly >= 70.0 and (lfcc_artifact_score >= 25.0 or spectral_anomaly_score >= 35.0):
+            score = max(base_score, 0.40 * base_score + 0.60 * physics_anomaly)
+            if score >= 55.0:
+                score = 62.0 + (score - 55.0) * 0.85
+
+        # 3. Clean Natural Human Voice Path:
+        # All anomaly signals are near zero.
+        elif base_score <= 35.0 and lfcc_artifact_score <= 10.0 and physics_anomaly <= 15.0:
+            score = base_score * 0.70
+
+        else:
+            score = base_score
+
         return round(float(max(0.0, min(100.0, score))), 2)
 
     def update_rolling_score(

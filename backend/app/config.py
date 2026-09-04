@@ -20,13 +20,11 @@ class ScoringConfig(BaseModel):
     # Feature weights in chunk risk blend (must sum to ~1.0)
     # Model and LFCC are the primary synthetic detectors and need enough weight
     # to push realistic deepfakes (which have perfect human pitch) over the 60% threshold.
-    WEIGHT_MODEL: float = 0.45       # Pretrained synthetic speech detector confidence
-    WEIGHT_LFCC: float = 0.35        # LFCC high-frequency artifact score
-    WEIGHT_PITCH_JITTER: float = 0.10 # Pitch flatness and cycle jitter anomaly
-    WEIGHT_SPECTRAL: float = 0.10    # Spectral flatness & centroid distribution
+    WEIGHT_MODEL: float = 0.25       # Pretrained synthetic speech detector confidence
+    WEIGHT_LFCC: float = 0.25        # LFCC high-frequency artifact score
+    WEIGHT_PITCH_JITTER: float = 0.30 # Pitch flatness and cycle jitter anomaly
+    WEIGHT_SPECTRAL: float = 0.20    # Spectral flatness & centroid distribution
 
-    # Transaction context sensitivity offsets (CRITICAL threshold only)
-    # All contexts use uniform 60.0% CRITICAL threshold (HIGH_RISK_MIN + offset)
     CONTEXT_THRESHOLD_OFFSETS: Dict[str, float] = {
         "general": 0.0,            # CRITICAL at 60.0%
         "credential_reset": 0.0,   # CRITICAL at 60.0%
