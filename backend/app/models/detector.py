@@ -315,8 +315,8 @@ class SyntheticVoiceDetector:
         ):
 
             fused_model_score = (
-                0.70 * model_score
-                + 0.30 * rf_score
+                0.20 * model_score
+                + 0.80 * rf_score
             )
 
         else:
@@ -373,3 +373,4 @@ class SyntheticVoiceDetector:
 # production routers.
 
 detector = SyntheticVoiceDetector()
+

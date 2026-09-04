@@ -28,6 +28,7 @@ export default function LiveDashboard({
   mode,
   transactionContext,
   onChangeContext,
+  language,
   onEndCall,
   liveMetrics,
   historyData,
@@ -42,8 +43,8 @@ export default function LiveDashboard({
   const features = liveMetrics?.features || {};
 
   // Status color logic based on config thresholds (used for chart ReferenceLines)
-  const lowMax = thresholds?.low_max || 40;
-  const highMin = thresholds?.high_min || 70;
+  const lowMax = 55;
+  const highMin = thresholds?.high_min || 60;
 
   // Use the backend-provided severity rather than recalculating it on the frontend
   const getRiskStatus = (backendSeverity) => {
@@ -105,14 +106,19 @@ export default function LiveDashboard({
           <div>
             <div className="flex items-center gap-2">
               <span className="text-xs font-bold text-white uppercase tracking-wider">
-                Mode A Stream Replay
+                {mode === 'mode_a_upload' ? 'Mode A Stream Replay' : 'Mode B Live Call'}
               </span>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-cyan-400 border border-slate-700">
                 ID: {sessionId}
               </span>
+              {language && (
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-950 text-indigo-300 border border-indigo-500/30 uppercase">
+                  {language}
+                </span>
+              )}
             </div>
             <p className="text-[11px] text-slate-400 font-mono mt-0.5">
-              Elapsed: {liveMetrics?.elapsed_seconds || 0}s | Analyzed Chunks: {historyData.length}
+              Elapsed: {liveMetrics?.elapsed_seconds ? liveMetrics.elapsed_seconds.toFixed(1) : 0}s | Analyzed Chunks: {historyData.length}
             </p>
           </div>
         </div>
@@ -120,7 +126,7 @@ export default function LiveDashboard({
         {/* Dynamic Context Switcher & End Call */}
         <div className="flex items-center gap-3">
           <button
-            onClick={onEndCall}
+            onClick={() => onEndCall()}
             className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold transition shadow-[0_0_15px_rgba(239,68,68,0.3)] cursor-pointer"
           >
             <PhoneOff className="w-4 h-4" />
@@ -345,3 +351,4 @@ export default function LiveDashboard({
     </div>
   );
 }
+

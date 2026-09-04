@@ -15,14 +15,15 @@ class ScoringConfig(BaseModel):
 
     # EWMA smoothing factor (alpha)
     # Higher alpha = more responsive to new chunk; Lower alpha = smoother
-    EWMA_ALPHA: float = 0.35
+    EWMA_ALPHA: float = 0.85
 
     # Feature weights in chunk risk blend (must sum to ~1.0)
-    # LFCC is heavily weighted as the primary discriminative high-frequency artifact detector
-    WEIGHT_MODEL: float = 0.40       # Pretrained synthetic speech detector confidence
-    WEIGHT_LFCC: float = 0.30        # LFCC high-frequency artifact score
-    WEIGHT_PITCH_JITTER: float = 0.15 # Pitch flatness and cycle jitter anomaly
-    WEIGHT_SPECTRAL: float = 0.15    # Spectral flatness & centroid distribution
+    # Model and LFCC are the primary synthetic detectors and need enough weight
+    # to push realistic deepfakes (which have perfect human pitch) over the 60% threshold.
+    WEIGHT_MODEL: float = 0.45       # Pretrained synthetic speech detector confidence
+    WEIGHT_LFCC: float = 0.35        # LFCC high-frequency artifact score
+    WEIGHT_PITCH_JITTER: float = 0.10 # Pitch flatness and cycle jitter anomaly
+    WEIGHT_SPECTRAL: float = 0.10    # Spectral flatness & centroid distribution
 
     # Transaction context sensitivity offsets (CRITICAL threshold only)
     # All contexts use uniform 60.0% CRITICAL threshold (HIGH_RISK_MIN + offset)
@@ -35,7 +36,7 @@ class ScoringConfig(BaseModel):
 
     # WARNING threshold offsets (LOW_RISK_MAX + offset) — kept context-specific
     CONTEXT_WARNING_OFFSETS: Dict[str, float] = {
-        "general": 0.0,            # WARNING at 40.0%
+        "general": 15.0,            # WARNING at 55.0%
         "credential_reset": -10.0, # WARNING at 30.0%
         "otp_share": -20.0,        # WARNING at 20.0%
         "fund_transfer": -25.0,    # WARNING at 20.0% (clamped by max(20.0, ...))
@@ -90,4 +91,15 @@ class Settings(BaseModel):
 
 
 settings = Settings()
+
+# Supported languages for multilingual detection
+SUPPORTED_LANGUAGES = ["english", "hindi", "malayalam"]
+
+# Language-specific pitch thresholds for prosody-aware anomaly detection.
+# Hindi and Malayalam have wider natural pitch ranges than English.
+LANGUAGE_PITCH_CONFIG = {
+    "english":   {"pitch_std_threshold": 8.0,  "fmin": 65.0, "fmax": 400.0},
+    "hindi":     {"pitch_std_threshold": 10.0, "fmin": 60.0, "fmax": 450.0},
+    "malayalam": {"pitch_std_threshold": 10.0, "fmin": 60.0, "fmax": 450.0},
+}
 

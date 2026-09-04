@@ -29,11 +29,14 @@ export default function PostCallSummary({ summaryData, historyData = [], onReset
   const alerts = summaryData?.alerts || [];
   const durationSec = totalChunks * 2.5;
 
-  const highMin = thresholds?.high_min || 70;
+  const highMin = thresholds?.high_min || 60;
   const lowMax = thresholds?.low_max || 40;
 
-  const isHighRisk = peakRisk >= highMin;
-  const isMediumRisk = peakRisk >= lowMax && !isHighRisk;
+  // Final verdict uses the same CRITICAL threshold as the scoring engine.
+// CRITICAL: peak risk reaches the configured critical threshold (60%).
+// WARNING: peak risk reaches the configured warning threshold (55%) but stays below CRITICAL.
+const isHighRisk = peakRisk >= highMin;
+const isMediumRisk = peakRisk >= 55 && !isHighRisk;
 
   const chartData = historyData.map((d) => ({
     time: `${d.elapsed_seconds || (d.chunk_index * 2.5)}s`,
@@ -46,18 +49,33 @@ export default function PostCallSummary({ summaryData, historyData = [], onReset
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 lg:p-8 shadow-2xl backdrop-blur-md">
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-slate-800 pb-6 mb-6">
           <div className="flex items-center gap-3">
-            <div className={`p-3 rounded-xl border ${isHighRisk ? 'bg-red-950/40 border-red-500/50 text-red-400' : 'bg-emerald-950/40 border-emerald-500/50 text-emerald-400'}`}>
-              {isHighRisk ? <ShieldAlert className="w-8 h-8" /> : <ShieldCheck className="w-8 h-8" />}
+            <div className={`p-3 rounded-xl border ${
+              isHighRisk
+                ? 'bg-red-950/40 border-red-500/50 text-red-400'
+                : isMediumRisk
+                  ? 'bg-amber-950/40 border-amber-500/50 text-amber-400'
+                  : 'bg-emerald-950/40 border-emerald-500/50 text-emerald-400'
+            }`}>
+              {isHighRisk ? (
+                <ShieldAlert size={24} />
+              ) : isMediumRisk ? (
+                <AlertTriangle size={24} />
+              ) : (
+                <ShieldCheck size={24} />
+              )}
             </div>
+
             <div>
-              <span className="text-xs font-mono uppercase tracking-widest text-slate-400">Post-Call Forensic Audit</span>
-              <h2 className="text-2xl font-black text-white mt-0.5">
-                {isHighRisk ? 'Critical Voice Impersonation Detected' : 'Authentic Human Call Verified'}
+              <h2 className="text-xl font-bold text-white">
+                {isHighRisk
+                  ? 'Critical Voice Impersonation Detected'
+                  : isMediumRisk
+                    ? 'Voice Impersonation Warning'
+                    : 'Authentic Human Call Verified'}
               </h2>
             </div>
           </div>
-
-          <button
+<button
             onClick={onReset}
             className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs uppercase tracking-wider transition shadow-lg cursor-pointer"
           >
@@ -121,7 +139,7 @@ export default function PostCallSummary({ summaryData, historyData = [], onReset
                 itemStyle={{ color: '#e2e8f0' }}
               />
               <ReferenceLine y={highMin} stroke="#ef4444" strokeDasharray="4 4" label={{ value: 'CRITICAL', fill: '#ef4444', fontSize: 10 }} />
-              <ReferenceLine y={lowMax} stroke="#eab308" strokeDasharray="4 4" label={{ value: 'WARN', fill: '#eab308', fontSize: 10 }} />
+              <ReferenceLine y={55} stroke="#eab308" strokeDasharray="4 4" label={{ value: 'WARN', fill: '#eab308', fontSize: 10 }} />
               <Line type="monotone" dataKey="risk" stroke="#06b6d4" strokeWidth={3} dot={{ r: 3, fill: '#06b6d4' }} />
             </LineChart>
           </ResponsiveContainer>
@@ -167,3 +185,7 @@ export default function PostCallSummary({ summaryData, historyData = [], onReset
     </div>
   );
 }
+
+
+
+
